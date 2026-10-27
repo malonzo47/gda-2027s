@@ -1,0 +1,784 @@
+---
+title: "Coordinate Reference Systems"
+subtitle: "Session 4 · Where is this data, really?"
+order: 4
+resources:
+  - countries-110m.json
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Instructor setup, hidden from the page.
+# Let PROJ download datum-shift grids from cdn.proj.org. Without them, an
+# NAD27 -> NAD83 conversion can silently fall back to a zero shift (see the
+# "Behind the scenes" box in section 3). freeze: auto in _quarto.yml saves the
+# results, so this only needs the network when the page is re-rendered.
+sf::sf_proj_network(TRUE)
+
+# Wider printed output, so data frames don't wrap on the page
+options(width = 90)
+```
+
+## Why this session
+
+In your homework, two layers that should have overlapped didn't. Something
+failed loudly, something failed silently, or both. Today is about *why*, so
+that you can spot the problem in any data and in any code an AI writes for you.
+
+By the end of this session you should be able to:
+
+1. Tell a **geographic** CRS from a **projected** one by reading R's printout.
+2. Explain what a **datum** is and when a datum difference matters.
+3. Explain why every flat map **distorts** something, and choose a projection
+   that protects what your analysis measures.
+4. Use **EPSG codes** to name, check, and convert CRSs in R.
+
+---
+
+## 1 The failure, again
+
+We'll use small datasets that come with `terra`: elevation for Luxembourg and
+the country's 12 cantons (districts). Both arrive in longitude and latitude.
+
+```{r}
+#| label: libraries
+#| message: false
+library(sf)       # vector data
+library(terra)    # raster data
+library(dplyr)    # filter() and friends
+library(spData)   # the `world` dataset, used in section 4
+library(units)    # converting m^2 to km^2, used in section 4
+```
+
+```{r}
+#| label: load
+# Elevation raster for Luxembourg
+elev_file <- system.file("ex/elev.tif", package = "terra")
+elev <- rast(elev_file)
+
+# The 12 cantons of Luxembourg, as sf polygons
+cantons_file <- system.file("ex/lux.shp", package = "terra")
+cantons <- st_read(cantons_file)
+```
+
+To set up the problem, imagine Luxembourg's mapping agency sends you the
+elevation data in their national grid, EPSG:2169. We'll create that version
+here. (`project()` converts a raster between CRSs. We'll look at its options
+in a later session.)
+
+```{r}
+#| label: make-national-grid
+elev_lux <- project(elev, "EPSG:2169")
+elev_lux
+```
+
+::: {.callout-tip icon="false"}
+## Predict
+
+Compare the `extent` of `elev_lux` above with the `Bounding box` that
+`st_read()` printed for `cantons`. If we draw the cantons on top of the
+elevation, what will we see?
+:::
+
+```{r}
+#| label: overlay-fail
+#| fig-height: 5
+# Raster first, cantons on top in red
+plot(elev_lux)
+plot(st_geometry(cantons), add = TRUE, border = "red")
+```
+
+No red lines, no error, no warning. Now two geoprocessing steps:
+
+```{r}
+#| label: crop-fail
+#| error: true
+# Loud failure: crop() checks that the layers overlap, and stops
+crop(elev_lux, cantons)
+```
+
+```{r}
+#| label: extract-fail
+# Silent failure: a mean elevation for each canton... all NaN
+# (na.rm = TRUE is needed because elev.tif has no-data cells along the border)
+bad <- extract(elev_lux, cantons, fun = mean, na.rm = TRUE)
+bad
+```
+
+Hold on to these three symptoms. The rest of the session explains them, and
+in section 6 we fix them.
+
+---
+
+## 2 Geographic vs. projected CRSs
+
+A **coordinate reference system** (CRS) is the set of rules that turns a pair
+of numbers into a place on Earth. There are two kinds.
+
+- A **geographic CRS** gives positions as **angles** on a model of the Earth:
+  longitude and latitude, in **degrees**. EPSG:4326 (WGS 84) is the most
+  common one.
+- A **projected CRS** flattens that model onto a plane and gives positions as
+  **x and y distances**, usually in **meters** (sometimes feet). Every
+  projected CRS is built on top of a geographic one.
+
+The key consequence: **a degree is not a fixed distance.** A degree of
+latitude is always about 111 km. A degree of longitude shrinks as you move
+toward the poles, because the meridians converge.
+
+::: {.callout-tip icon="false"}
+## Predict
+
+How long is one degree of longitude at Luxembourg's latitude (about 49.6° N)?
+More or less than 100 km?
+:::
+
+```{ojs}
+//| echo: false
+viewof lat = Inputs.range([0, 89], {
+  value: 38.9, step: 0.1, label: "Latitude (° N)"
+})
+```
+
+```{ojs}
+//| echo: false
+// Length of one degree on a sphere of radius 6,371 km.
+// Latitude: constant. Longitude: shrinks with cos(latitude).
+kmPerDegLat = 111.2
+kmPerDegLon = 111.2 * Math.cos(lat * Math.PI / 180)
+
+// A few reference places, to make the slider concrete
+places = [
+  {name: "Equator", lat: 0},
+  {name: "Washington, DC", lat: 38.9},
+  {name: "Luxembourg", lat: 49.6},
+  {name: "Oslo", lat: 59.9},
+  {name: "Svalbard", lat: 78.2}
+]
+
+{
+  // Two horizontal bars, drawn to the same scale (111.2 km = full width)
+  const w = Math.min(width, 640);
+  const bar = (label, km, color) => html`
+    <div style="margin:.35rem 0">
+      <div style="font-size:.9rem">${label}: <b>${km.toFixed(1)} km</b></div>
+      <div style="height:18px;width:${(km / kmPerDegLat) * w}px;background:${color};border-radius:3px"></div>
+    </div>`;
+  // Buttons that move the slider. Built with DOM calls because Quarto's
+  // html`` template doesn't attach functions as event handlers.
+  const near = places.map(p => {
+    const b = document.createElement("button");
+    b.textContent = p.name;
+    b.className = "btn btn-sm btn-outline-secondary";
+    b.style.margin = ".2rem .3rem .2rem 0";
+    b.addEventListener("click", () => {
+      const input = viewof lat;
+      input.value = p.lat;
+      input.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    return b;
+  });
+  return html`<div class="widget">
+    ${bar("1° of latitude", kmPerDegLat, "#7a8ca3")}
+    ${bar("1° of longitude", kmPerDegLon, "#d1495b")}
+    <div style="margin-top:.5rem;font-size:.9rem">Jump to: ${near}</div>
+  </div>`;
+}
+```
+
+So a "square" one degree on a side is not square on the ground, and its area
+depends on where it is. That is why lengths, areas, and buffers measured
+directly in degrees are meaningless.
+
+Now read what R tells you. Each object's CRS is in its printout, and there's a
+direct yes/no question you can ask:
+
+```{r}
+#| label: geographic-check
+# Is it longitude/latitude (degrees)?
+st_is_longlat(cantons)   # sf objects
+is.lonlat(elev_lux)      # terra rasters
+
+# The ranges of the coordinates tell the same story
+st_bbox(cantons)
+ext(elev_lux)
+```
+
+The cantons span about 0.8 degrees east–west. The raster spans about 57,000
+meters. Same country, different units, so the numbers don't overlap. That is
+the whole story of section 1, and we'll come back to it.
+
+::: {.callout-note}
+## A helpful shortcut in sf
+
+When you ask `sf` for an area or distance on longitude/latitude data, it does
+the math on the globe and gives you meters (`st_area(cantons)` works). Don't
+count on every function being this careful. A raster's cell size, for example,
+stays in degrees.
+:::
+
+---
+
+## 3 Datums and ellipsoids
+
+Latitude and longitude only mean something once you say **which model of the
+Earth** they're measured on.
+
+- The Earth is close to an **ellipsoid**: a sphere squashed at the poles. The
+  equatorial radius is about 21 km longer than the polar radius.
+- An **ellipsoid** is the mathematical shape (its size and flattening).
+- A **datum** is an ellipsoid *plus* how it is pinned to the real Earth: where
+  its center is and how it's oriented.
+
+Change the datum and the same coordinates point to a slightly different spot
+on the ground.
+
+| Datum | Ellipsoid | Pinned to | Where you'll meet it |
+|---|---|---|---|
+| NAD27 | Clarke 1866 | A survey point in Kansas (Meades Ranch) | Old maps and surveys |
+| NAD83 | GRS 80 | Earth's center (fixed to the North American plate) | US Census / TIGER data, state agencies |
+| WGS 84 | WGS 84 | Earth's center (global) | GPS, most web data, EPA TRI |
+
+Let's measure how much a datum matters. Take one set of coordinates for the AU
+campus and label it with two datums:
+
+```{r}
+#| label: datum-shift
+# One pair of numbers: longitude, latitude
+au_xy <- st_point(c(-77.0887, 38.9365))
+
+# The same numbers, labeled with two different datums
+au_nad27 <- st_sfc(au_xy, crs = 4267)
+au_nad83 <- st_sfc(au_xy, crs = 4269)
+
+# Convert the NAD27 point to NAD83, so both are on one datum
+au_nad27_converted <- st_transform(au_nad27, 4269)
+
+# How far apart are "the same" coordinates on the ground?
+st_distance(au_nad83, au_nad27_converted)
+```
+
+About 28 meters, which is enough to put a facility on the wrong side of a
+street or a census tract boundary. Between **NAD83 and WGS 84**, the difference
+in the US is only about a meter or two. That rarely matters for tract-level
+analysis or 30 m rasters.
+
+But R can't know what precision *your* question needs, so it treats any
+difference in CRS as a mismatch. That's why, in the asthma problem, the EPA TRI
+points (WGS 84) still have to be transformed before they can be joined to the
+Census tracts (NAD83).
+
+::: {.callout-note collapse="true"}
+## Behind the scenes: datum shifts need extra files
+
+Accurate NAD27 → NAD83 conversion uses a grid of measured shifts. That grid is
+a separate download, not built into R. If PROJ (the library under `sf` and
+`terra`) can't find it, it falls back to a "ballpark" conversion. That can
+mean **no shift at all, with no error**. This page was built with
+`sf_proj_network(TRUE)`, which lets PROJ fetch grids from the internet as
+needed. You'll rarely need NAD27 in this course. The lesson is the general
+one: a step that runs without error isn't proof that it did what you think.
+:::
+
+---
+
+## 4 Projections: flattening is a trade
+
+You can't flatten an orange peel without stretching or tearing it. Map
+projections are systematic ways of doing that stretching. They come in
+**families**, named after the flat surface the globe is projected onto:
+
+- **Cylindrical**: wrap a cylinder around the globe (Mercator, UTM).
+- **Conic**: set a cone on top of it (Albers, Lambert Conformal Conic). Good
+  for mid-latitude regions that are wider than they are tall, like the US or
+  Maryland.
+- **Azimuthal**: touch a flat plane to one point (polar maps, "distance from
+  here" maps).
+
+Each projection protects some properties and gives up others:
+
+- **Conformal**: preserves **shape** (angles) locally. Areas get distorted.
+- **Equal-area**: preserves **area**. Shapes get distorted.
+- **Equidistant**: preserves **distance**, but only from one point or along
+  certain lines.
+- **Azimuthal**: preserves **direction** from the center point.
+
+**No flat map preserves all of these.** In particular, a map can't be both
+conformal and equal-area. So you choose a projection by asking what your
+analysis *measures*.
+
+::: {.callout-tip icon="false"}
+## Predict
+
+The red circles below are all the same size on the globe (radius 4°). On the
+Mercator map, how will the circles near the poles compare with the circles at
+the equator? What about on Equal Earth?
+:::
+
+```{ojs}
+//| echo: false
+// ---- Data: world countries (Natural Earth via the world-atlas package) ----
+tc = require("topojson-client@3.1.0")
+worldTopo = FileAttachment("countries-110m.json").json()
+land = tc.feature(worldTopo, worldTopo.objects.land)
+countries = tc.feature(worldTopo, worldTopo.objects.countries).features
+
+// ---- Shared geometry for the projection explorer ----
+// Tissot circles: identical 4-degree circles on a 30 x 15 degree grid
+tissot = {
+  const circles = [];
+  for (let lon = -180; lon < 180; lon += 30) {
+    for (let lat = -75; lat <= 75; lat += 15) {
+      circles.push(d3.geoCircle().center([lon, lat]).radius(4)());
+    }
+  }
+  return {type: "GeometryCollection", geometries: circles};
+}
+
+// The shortest route on the globe (a great circle) from DC to London
+route = ({type: "LineString", coordinates: [[-77.04, 38.90], [-0.13, 51.51]]})
+
+// Boxes to fit maps to. Mercator can't show the poles (they're infinitely
+// far away), so its world view stops at 60° S and 84° N.
+naBox = d3.geoGraticule().extent([[-128, 18], [-62, 56]]).outline()
+mercBox = d3.geoGraticule().extent([[-180, -60], [180, 84]]).outline()
+fitTarget = view => view === "na" ? naBox : view === "merc" ? mercBox : {type: "Sphere"}
+
+// ---- The projections on offer, with the facts shown in the info card ----
+projections = new Map([
+  ["Equirectangular (plain lon/lat)", {
+    make: () => d3.geoEquirectangular(),
+    view: "world", family: "Cylindrical",
+    keeps: "Distance along meridians only",
+    gives: "Area and shape, badly near the poles",
+    epsg: "What you get when you plot EPSG:4326 data as x/y",
+    use: "Quick looks. Not for measuring anything."
+  }],
+  ["Mercator", {
+    make: () => d3.geoMercator(),
+    view: "merc", family: "Cylindrical",
+    keeps: "Shape (conformal); compass directions are straight lines",
+    gives: "Area: grows rapidly toward the poles",
+    epsg: "3857 (Web Mercator, used by web maps), 3395",
+    use: "Navigation, web basemaps. Never for area."
+  }],
+  ["Equal Earth", {
+    make: () => d3.geoEqualEarth(),
+    view: "world", family: "Pseudocylindrical",
+    keeps: "Area (equal-area)",
+    gives: "Shape, especially near the edges",
+    epsg: "8857",
+    use: "World maps of anything per area: density, rates, land cover."
+  }],
+  ["Albers Equal Area Conic (US)", {
+    make: () => d3.geoConicEqualArea().parallels([29.5, 45.5]).rotate([96, 0]),
+    view: "na", family: "Conic",
+    keeps: "Area (equal-area)",
+    gives: "Shape, slightly, away from the two standard parallels",
+    epsg: "5070 (NAD83 / Conus Albers, used by NLCD)",
+    use: "Areas and densities across the US."
+  }],
+  ["Lambert Conformal Conic (Maryland)", {
+    make: () => d3.geoConicConformal().parallels([38.3, 39.45]).rotate([77, 0]),
+    view: "na", family: "Conic",
+    keeps: "Shape (conformal)",
+    gives: "Area, growing away from Maryland's latitudes",
+    epsg: "26985 (NAD83 / Maryland, meters), 2248 (same, US feet)",
+    use: "State Plane: Maryland agency data, local measurement."
+  }],
+  ["Transverse Mercator (UTM zone 18N)", {
+    make: () => d3.geoTransverseMercator().rotate([75, 0]),
+    view: "na", family: "Cylindrical (turned sideways)",
+    keeps: "Shape (conformal)",
+    gives: "Scale grows east and west of the central meridian (75° W)",
+    epsg: "26918 (NAD83 / UTM 18N), 32618 (WGS 84 / UTM 18N)",
+    use: "Distances and buffers within a 6°-wide zone (DC, MD, VA)."
+  }],
+  ["Azimuthal Equidistant (centered on DC)", {
+    make: () => d3.geoAzimuthalEquidistant().rotate([77.04, -38.9]),
+    view: "world", family: "Azimuthal",
+    keeps: "Distance and direction from the center point (DC)",
+    gives: "Area and shape, worst far from the center",
+    epsg: "No standard code; defined around any center you choose",
+    use: "\"How far is everything from here?\" maps."
+  }],
+  ["Orthographic (a view of the globe)", {
+    make: () => d3.geoOrthographic().rotate([77.04, -38.9]),
+    view: "world", family: "Azimuthal (perspective)",
+    keeps: "Looks like the globe from space",
+    gives: "Shows only half the Earth; area and distance squeezed at the edge",
+    epsg: "Rarely used for analysis",
+    use: "Visual reference: compare the other maps with this one."
+  }]
+])
+```
+
+```{ojs}
+//| echo: false
+viewof projName = Inputs.select([...projections.keys()], {
+  label: "Projection", value: "Mercator"
+})
+viewof layers = Inputs.checkbox(["Tissot circles", "Route: DC → London"], {
+  value: ["Tissot circles", "Route: DC → London"]
+})
+```
+
+```{ojs}
+//| echo: false
+{
+  const p = projections.get(projName);
+  // Map uses the full page width (best when projected in class); the info
+  // card sits underneath it
+  const w = width;
+  const h = Math.round(w * 0.58);
+
+  // Build the projection and fit it to the world, Mercator's box, or North
+  // America. clipExtent keeps conic/transverse maps from drawing off-screen.
+  const projection = p.make()
+    .fitExtent([[8, 8], [w - 8, h - 8]], fitTarget(p.view))
+    .clipExtent([[0, 0], [w, h]]);
+  const path = d3.geoPath(projection);
+
+  const svg = d3.create("svg").attr("viewBox", [0, 0, w, h]).style("width", "100%");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", "#eef3f7");
+  svg.append("path").attr("d", path(d3.geoGraticule10()))
+    .attr("fill", "none").attr("stroke", "#cfd8e0").attr("stroke-width", 0.5);
+  svg.append("path").attr("d", path(land)).attr("fill", "#c9c4b8");
+  if (layers.includes("Tissot circles")) {
+    svg.append("path").attr("d", path(tissot))
+      .attr("fill", "#d1495b").attr("fill-opacity", 0.55);
+  }
+  if (layers.includes("Route: DC → London")) {
+    svg.append("path").attr("d", path(route))
+      .attr("fill", "none").attr("stroke", "#1f5f8b").attr("stroke-width", 2.5);
+  }
+  svg.append("path").attr("d", path({type: "Sphere"}))
+    .attr("fill", "none").attr("stroke", "#9aa5ad");
+
+  // Each fact is its own <div> so the card can flow into columns
+  const card = html`<dl class="proj-card">
+    <div><dt>Family</dt><dd>${p.family}</dd></div>
+    <div><dt>Preserves</dt><dd>${p.keeps}</dd></div>
+    <div><dt>Gives up</dt><dd>${p.gives}</dd></div>
+    <div><dt>EPSG codes</dt><dd>${p.epsg}</dd></div>
+    <div><dt>Use it for</dt><dd>${p.use}</dd></div>
+  </dl>`;
+
+  return html`<div class="widget">${svg.node()}${card}</div>`;
+}
+```
+
+Things to try:
+
+- **Mercator vs. Equal Earth:** compare the circles near the poles. Which map
+  keeps their *size* and which keeps their *shape*?
+- **The DC → London route** is the shortest path on the globe. On which
+  projection is it a straight line? (Hint: one of them measures distance from
+  DC.)
+- **The two conic maps** look almost the same over Maryland. Over that small
+  area, the distortion differences are tiny. This is why a sensible local CRS
+  matters much more than the "perfect" one.
+
+### How big is Greenland, really?
+
+On Mercator, Greenland looks about as big as Africa. Drag it south and watch
+what happens on each map. Its true size never changes. The Democratic
+Republic of the Congo (DRC, in blue) stays put for comparison.
+
+```{ojs}
+//| echo: false
+viewof targetLat = Inputs.range([0, 73], {
+  value: 73, step: 1, label: "Greenland's center latitude (° N)"
+})
+```
+
+```{ojs}
+//| echo: false
+// Move a country along its own meridian to a new center latitude by rotating
+// it on the globe. Rotation keeps its true size and shape.
+function moveTo(feature, newLat) {
+  const [lon0, lat0] = d3.geoCentroid(feature);
+  const toOrigin = d3.geoRotation([-lon0, -lat0]);   // centroid -> (0, 0)
+  const toTarget = d3.geoRotation([-lon0, -newLat]); // (lon0, newLat) -> (0, 0)
+  const move = pt => toTarget.invert(toOrigin(pt));
+  const walk = c => typeof c[0] === "number" ? move(c) : c.map(walk);
+  return {type: "Feature", geometry: {
+    type: feature.geometry.type, coordinates: walk(feature.geometry.coordinates)
+  }};
+}
+
+greenland = countries.find(d => d.properties.name === "Greenland")
+drc = countries.find(d => d.properties.name === "Dem. Rep. Congo")
+movedGreenland = moveTo(greenland, targetLat)
+
+{
+  const wide = width > 700;
+  const w = wide ? Math.floor((width - 40) / 2) : width;
+  const h = Math.round(w * 0.75);
+
+  // Draw one panel and report Greenland's apparent size relative to the DRC
+  function panel(title, makeProjection, view) {
+    const projection = makeProjection().fitExtent([[6, 6], [w - 6, h - 6]], fitTarget(view));
+    const path = d3.geoPath(projection);
+    const svg = d3.create("svg").attr("viewBox", [0, 0, w, h]).style("width", "100%");
+    svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", "#eef3f7");
+    svg.append("path").attr("d", path(land)).attr("fill", "#dcd8cf");
+    svg.append("path").attr("d", path(greenland))
+      .attr("fill", "none").attr("stroke", "#d1495b").attr("stroke-dasharray", "3 3");
+    svg.append("path").attr("d", path(drc)).attr("fill", "#1f5f8b");
+    svg.append("path").attr("d", path(movedGreenland)).attr("fill", "#d1495b");
+    const looks = path.area(movedGreenland) / path.area(drc);
+    return html`<div>
+      <div style="font-weight:600">${title}</div>${svg.node()}
+      <div>Greenland looks <span class="readout">${looks.toFixed(1)}×</span> the DRC</div>
+    </div>`;
+  }
+
+  // True ratio, measured on the globe
+  const truth = d3.geoArea(greenland) / d3.geoArea(drc);
+
+  return html`<div class="widget">
+    <div style="display:${wide ? "grid" : "block"};grid-template-columns:1fr 1fr;gap:1rem">
+      ${panel("Mercator (conformal)", d3.geoMercator, "merc")}
+      ${panel("Equal Earth (equal-area)", d3.geoEqualEarth, "world")}
+    </div>
+    <p style="margin:.75rem 0 0">On the globe, Greenland is
+      <b>${truth.toFixed(2)}×</b> the size of the DRC, wherever you put it.
+      The dashed outline is where Greenland actually is.</p>
+  </div>`;
+}
+```
+
+The same comparison in R, using the `world` dataset from the `spData`
+package:
+
+```{r}
+#| label: areas
+# `world` (from spData) is in EPSG:4326
+two <- filter(world, name_long %in% c("Greenland", "Democratic Republic of the Congo"))
+
+# The same two countries in two projected CRSs
+two_merc <- st_transform(two, 3857)   # Web Mercator
+two_ee   <- st_transform(two, 8857)   # Equal Earth
+
+# Area on the globe (sf does this for lon/lat data), then on each flat map
+area_globe <- st_area(two)
+area_merc  <- st_area(two_merc)
+area_ee    <- st_area(two_ee)
+
+# Convert from square meters to square kilometers
+area_globe <- set_units(area_globe, km^2)
+area_merc  <- set_units(area_merc, km^2)
+area_ee    <- set_units(area_ee, km^2)
+
+data.frame(country = two$name_long, area_globe, area_merc, area_ee)
+```
+
+::: {.callout-tip icon="false"}
+## Discuss
+
+Each number above was computed correctly. Which one would you report as
+Greenland's area, and why? Which one would an AI report if it "helpfully"
+transformed your data to 3857 first?
+:::
+
+---
+
+## 5 EPSG codes: names for CRSs
+
+Saying "NAD83, Lambert Conformal Conic, standard parallels 38.3° and 39.45°,
+meters" every time would be painful. The **EPSG registry** (now maintained by
+IOGP, the oil and gas producers' association) gives each complete CRS
+definition a number. One code bundles the datum, the ellipsoid, the
+projection and its parameters, and the units.
+
+Codes you'll meet in this course:
+
+| EPSG | Name | Type | Units | Where you'll see it |
+|---|---|---|---|---|
+| 4326 | WGS 84 | Geographic | degrees | GPS, most web data, EPA TRI |
+| 4269 | NAD83 | Geographic | degrees | Census tracts via `tidycensus` |
+| 4267 | NAD27 | Geographic | degrees | Old maps and surveys |
+| 3857 | WGS 84 / Pseudo-Mercator | Projected, cylindrical | "meters" (stretched) | Web map tiles. Display only. |
+| 5070 | NAD83 / Conus Albers | Projected, conic, equal-area | meters | NLCD; areas across the US |
+| 26918 | NAD83 / UTM zone 18N | Projected, transverse Mercator | meters | Distances in DC, MD, VA |
+| 26985 | NAD83 / Maryland | Projected, Lambert conic | meters | Maryland state data |
+| 2248 | NAD83 / Maryland (ftUS) | Projected, Lambert conic | **US feet** | Maryland county GIS. Check the units! |
+
+You don't need to memorize these. You need to know how to **read** one. Ask
+`terra` for a short description, or print the full definition with `sf`:
+
+```{r}
+#| label: read-epsg
+# Short summary: name, code, and where it's meant to be used
+crs("EPSG:26985", describe = TRUE)
+```
+
+```{r}
+#| label: read-wkt
+# The full definition (called WKT). Skim for these four things:
+#   the name on the first line (PROJCRS = projected; GEOGCRS = geographic)
+#   DATUM and ELLIPSOID
+#   METHOD (the projection)
+#   LENGTHUNIT under AXIS (the units of x and y)
+st_crs(26985)
+```
+
+::: {.callout-tip icon="false"}
+## Choose a CRS
+
+For each task, pick a CRS from the table and defend it in one sentence.
+
+1. Total impervious area in each Maryland county.
+2. Number of TRI facilities within 1 km of each census tract centroid in
+   Baltimore.
+3. Asthma prevalence compared across all 48 contiguous states.
+4. An interactive web map for a community group.
+:::
+
+::: {.callout-note collapse="true"}
+## Some defensible answers
+
+1. **5070** (equal-area) or **26985**. Within one state, State Plane's area
+   distortion is tiny, so either is defensible. Saying *why* is the point.
+2. **26985** or **26918**: both are in meters and accurate locally for
+   distance. Not 4326: a 1 km buffer needs meters.
+3. **5070**: equal-area across the whole country.
+4. **3857** for *display*. Do the analysis in a measuring CRS first, then
+   transform for the map.
+:::
+
+---
+
+## 6 Back to the failure: fix it and check it
+
+Now the symptoms from section 1 make sense:
+
+- The cantons' coordinates are around **6 and 50** (degrees). The raster's are
+  in the **tens of thousands** (meters).
+- `plot()` just draws numbers. It put the cantons in a tiny patch near
+  x = 6, y = 50, far outside the raster's extent, so nothing appeared on the
+  map.
+- `crop()` compared the two extents, found no overlap, and **stopped**.
+- `extract()` found no raster cells inside any polygon and returned `NaN`,
+  **without complaint**.
+
+The fix is to put both layers in one CRS. Transform the **vector** to match
+the raster, not the other way around. Moving polygon vertices is exact, while
+reprojecting a raster has to resample cell values.
+
+```{r}
+#| label: fix
+# Convert the cantons into the raster's CRS
+cantons_lux <- st_transform(cantons, crs(elev_lux))
+
+# Check 1: do the two CRSs now match?
+st_crs(cantons_lux) == st_crs(elev_lux)
+
+# Check 2: are the coordinate ranges now comparable?
+st_bbox(cantons_lux)
+ext(elev_lux)
+```
+
+```{r}
+#| label: fix-plot
+#| fig-height: 5
+# Check 3: look at it
+plot(elev_lux)
+plot(st_geometry(cantons_lux), add = TRUE, border = "red")
+```
+
+```{r}
+#| label: fix-extract
+# The zonal mean now works: one number per canton
+good <- extract(elev_lux, cantons_lux, fun = mean, na.rm = TRUE)
+cantons_lux$elev_mean <- good$elevation
+
+# Check 4: no missing values, and plausible elevations (meters)
+sum(is.na(cantons_lux$elev_mean))
+summary(cantons_lux$elev_mean)
+```
+
+::: {.callout-warning}
+## Labeling is not converting
+
+`st_transform()` **converts** coordinates: the numbers change. `st_set_crs()`
+(or `st_crs(x) <- ...`) only **relabels** them: the numbers stay the same.
+Relabeling is correct only when a file has *no* CRS and you know what it
+should be. AI assistants sometimes suggest it as a "fix" for a mismatch.
+Here's what that does:
+
+```{r}
+#| label: relabel-trap
+# Wrong: claims the degrees are now meters
+cantons_relabeled <- st_set_crs(cantons, 2169)
+st_bbox(cantons_relabeled)
+```
+
+R warns you, and the bounding box gives it away: the "meters" are still 5.7
+to 50.2. In EPSG:2169, coordinates that small sit at the grid's origin, which
+is in France, about 120 km southwest of Luxembourg's center.
+:::
+
+---
+
+## 7 In your code
+
+| Question | Function | What to look for |
+|---|---|---|
+| What CRS is this? | Print the object; `st_crs(x)`; `crs(r, describe = TRUE)` | Name, EPSG code, units |
+| Degrees or meters? | `st_is_longlat(x)`; `is.lonlat(r)` | `TRUE` means degrees |
+| Do my layers match? | `st_crs(a) == st_crs(b)`; compare `st_bbox()` and `ext()` | Same CRS; ranges that overlap |
+| Does it look right? | `plot()` the raster, then the vector with `add = TRUE` | Lines where you expect them |
+| Convert a vector | `st_transform(x, crs)` | The bbox numbers change |
+| Convert a raster | `project(r, crs)` | Resamples values (later session) |
+| Label a CRS-less file | `st_set_crs(x, crs)` | Only when the CRS is missing *and* known |
+
+The habit that ties it together: **check the CRS before any operation that
+combines two layers**, and check the result after. Most CRS mistakes don't
+produce errors. They produce wrong answers.
+
+## 8 Check yourself
+
+::: {.callout-note collapse="true"}
+## 1. A bounding box reads `xmin: 316268 ymin: 4295630 xmax: 334407 ymax: 4318264`. Degrees or meters? Projected or geographic?
+
+Meters, so it's projected. Longitudes only go to ±180 and latitudes to ±90.
+Numbers in the hundreds of thousands and millions look like UTM. (This is
+Washington, DC, in UTM zone 18N.)
+:::
+
+::: {.callout-note collapse="true"}
+## 2. Why did `extract()` return `NaN` instead of an error?
+
+It did what it was asked: it looked for raster cells inside each polygon and
+found none, because the polygons sat far outside the raster's extent. An empty
+result isn't an error to the function. Only you know it's wrong, which is why
+you check for NAs after every extract.
+:::
+
+::: {.callout-note collapse="true"}
+## 3. An AI's code calls `st_transform(tracts, 3857)` before computing `st_area()`. What's the problem?
+
+Web Mercator inflates area by a factor that grows with latitude. At Maryland's
+latitude (about 39° N), that's about 1.66×, so every area would be about
+two-thirds too large. Use 5070 or 26985, or compute the area on the original lon/lat
+data.
+:::
+
+::: {.callout-note collapse="true"}
+## 4. TRI facilities are in EPSG:4326 and tracts are in EPSG:4269. The difference is about a meter. Why transform anyway?
+
+Because `sf` requires both layers to have the *same* CRS before it will join
+them, and it can't judge whether a meter matters for your question. Transform
+one to match the other (or both to a projected CRS you'll measure in) and the
+join runs.
+:::
+
+## Further reading
+
+- *Geocomputation with R*, [Chapter 2.4: Coordinate Reference
+  Systems](https://r.geocompx.org/spatial-class#crs-intro) and [Chapter 7:
+  Reprojecting geographic data](https://r.geocompx.org/reproj-geo-data).

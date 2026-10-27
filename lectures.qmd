@@ -1,0 +1,10 @@
+---
+title: "Lectures"
+toc: false
+listing:
+  # Builds the list from each lecture's front matter (title, subtitle, order).
+  contents: lectures/*/index.qmd
+  type: table
+  sort: "order"
+  fields: [title, subtitle]
+---

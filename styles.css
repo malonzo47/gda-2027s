@@ -1,0 +1,51 @@
+/* Course-site styles. Kept small: the cosmo theme does most of the work. */
+
+/* Slightly larger body text so pages read well when projected in class. */
+body {
+  font-size: 1.08rem;
+}
+
+/* Code output a touch smaller than code, so the two are easy to tell apart. */
+pre.sourceCode,
+div.cell-output pre {
+  font-size: 0.9rem;
+}
+
+/* OJS cells with echo: false still carry hidden source and a visible
+   "copy" button next to the widget. Hide the button when its code is hidden. */
+.code-copy-outer-scaffold:has(> .cell-code.hidden) > .code-copy-button {
+  display: none;
+}
+
+/* Containers for the interactive (OJS) figures. */
+.widget {
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0 1.5rem;
+  background: #fbfbfc;
+}
+
+/* The info card that sits beside the projection map. */
+.proj-card {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0 1.25rem;
+  margin: 0.5rem 0 0;
+}
+.proj-card dt {
+  font-weight: 600;
+  margin-top: 0.35rem;
+}
+.proj-card dd {
+  margin-left: 0;
+}
+
+/* Large readout numbers in widgets. */
+.readout {
+  font-size: 1.6rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

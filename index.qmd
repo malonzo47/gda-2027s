@@ -1,0 +1,12 @@
+---
+title: "Geospatial Data Analysis"
+subtitle: "American University · Spring 2027"
+toc: false
+---
+
+Lecture pages for GDA. Each page mixes short explanations, R code you can
+copy into RStudio, and interactive figures you can explore on your own.
+
+Canvas remains the official home for the syllabus, assignments, and grades.
+
+- [Lectures](lectures.qmd)

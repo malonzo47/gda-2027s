@@ -1,0 +1,33 @@
+# Quarto website for GDA (Spring 2027).
+# Render from RStudio (Build > Render Website) or `quarto render` in this folder.
+# Output goes to docs/, which GitHub Pages serves from the main branch.
+
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Geospatial Data Analysis"
+  site-url: "https://malonzo47.github.io/gda-2027s/"
+  repo-url: "https://github.com/malonzo47/gda-2027s"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      - href: lectures.qmd
+        text: Lectures
+  page-footer:
+    center: "American University · Spring 2027"
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+    code-copy: true
+
+execute:
+  # Re-run R code only when a page's source changes. The saved results live in
+  # _freeze/ and are committed, so the site can be rebuilt without re-running
+  # every lecture (and without network calls such as PROJ grid downloads).
+  freeze: auto
