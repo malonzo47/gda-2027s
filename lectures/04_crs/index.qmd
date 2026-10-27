@@ -4,6 +4,16 @@ subtitle: "Session 4 · Where is this data, really?"
 order: 4
 resources:
   - countries-110m.json
+format:
+  html:
+    # All R code starts folded; outputs and figures stay visible
+    code-fold: true
+    code-summary: "Show code"
+knitr:
+  opts_chunk:
+    # Print all of a chunk's output after its code, so each chunk gets one
+    # "Show code" fold instead of one per line
+    results: hold
 ---
 
 ```{r}
@@ -21,29 +31,49 @@ sf::sf_proj_network(TRUE)
 options(width = 90)
 ```
 
-## Why this session
+```{ojs}
+//| echo: false
+// ---- Shared data and helpers for every widget on this page ----
 
-In your homework, two layers that should have overlapped didn't. Something
-failed loudly, something failed silently, or both. Today is about *why*, so
-that you can spot the problem in any data and in any code an AI writes for you.
+// World countries and land (Natural Earth via the world-atlas package)
+tc = require("topojson-client@3.1.0")
+worldTopo = FileAttachment("countries-110m.json").json()
+land = tc.feature(worldTopo, worldTopo.objects.land)
+countries = tc.feature(worldTopo, worldTopo.objects.countries).features
 
-By the end of this session you should be able to:
+// Colors used across widgets
+col = ({
+  ocean: "#eef3f7", land: "#cfc9bc", grid: "#c3ced8", ink: "#33414d",
+  red: "#d1495b", blue: "#1f5f8b", orange: "#e08a1e", green: "#5b8c5a"
+})
 
-1. Tell a **geographic** CRS from a **projected** one by reading R's printout.
-2. Explain what a **datum** is and when a datum difference matters.
-3. Explain why every flat map **distorts** something, and choose a projection
-   that protects what your analysis measures.
-4. Use **EPSG codes** to name, check, and convert CRSs in R.
+// Boxes to fit maps to. Mercator can't show the poles (they're infinitely
+// far away), so its world view stops at 60° S and 84° N.
+naBox = d3.geoGraticule().extent([[-128, 18], [-62, 56]]).outline()
+mercBox = d3.geoGraticule().extent([[-180, -60], [180, 84]]).outline()
+fitTarget = view => view === "na" ? naBox : view === "merc" ? mercBox : {type: "Sphere"}
+```
+
+## Today
+
+- Tell a **geographic** CRS from a **projected** one in R's printout
+- Explain what a **datum** is, and when datum differences matter
+- Explain why every flat map **distorts** something, and choose a projection
+  that protects what you measure
+- Use **EPSG codes** to name, check, and convert CRSs
 
 ---
 
 ## 1 The failure, again
 
-We'll use small datasets that come with `terra`: elevation for Luxembourg and
-the country's 12 cantons (districts). Both arrive in longitude and latitude.
+- Same failure as your homework, on new data: Luxembourg
+- Elevation raster + 12 cantons (districts), both included with `terra`
+- Scenario: the national mapping agency sends the elevation in its own grid,
+  **EPSG:2169**
 
 ```{r}
 #| label: libraries
+#| warning: false
 #| message: false
 library(sf)       # vector data
 library(terra)    # raster data
@@ -63,13 +93,10 @@ cantons_file <- system.file("ex/lux.shp", package = "terra")
 cantons <- st_read(cantons_file)
 ```
 
-To set up the problem, imagine Luxembourg's mapping agency sends you the
-elevation data in their national grid, EPSG:2169. We'll create that version
-here. (`project()` converts a raster between CRSs. We'll look at its options
-in a later session.)
-
 ```{r}
 #| label: make-national-grid
+# Set up the scenario: the elevation in Luxembourg's national grid.
+# (project() converts a raster between CRSs; more on it in a later session.)
 elev_lux <- project(elev, "EPSG:2169")
 elev_lux
 ```
@@ -77,9 +104,8 @@ elev_lux
 ::: {.callout-tip icon="false"}
 ## Predict
 
-Compare the `extent` of `elev_lux` above with the `Bounding box` that
-`st_read()` printed for `cantons`. If we draw the cantons on top of the
-elevation, what will we see?
+Compare the raster's `extent` with the cantons' `Bounding box`. If we draw the
+cantons on top of the elevation, what will we see?
 :::
 
 ```{r}
@@ -89,8 +115,6 @@ elevation, what will we see?
 plot(elev_lux)
 plot(st_geometry(cantons), add = TRUE, border = "red")
 ```
-
-No red lines, no error, no warning. Now two geoprocessing steps:
 
 ```{r}
 #| label: crop-fail
@@ -107,38 +131,118 @@ bad <- extract(elev_lux, cantons, fun = mean, na.rm = TRUE)
 bad
 ```
 
-Hold on to these three symptoms. The rest of the session explains them, and
-in section 6 we fix them.
+**Three symptoms:**
+
+- The plot shows **nothing**: no error, no warning
+- `crop()` **stops** with an error
+- `extract()` returns **all NaN**: no error, no warning
 
 ---
 
 ## 2 Geographic vs. projected CRSs
 
-A **coordinate reference system** (CRS) is the set of rules that turns a pair
-of numbers into a place on Earth. There are two kinds.
+### Geographic CRS: positions are angles
 
-- A **geographic CRS** gives positions as **angles** on a model of the Earth:
-  longitude and latitude, in **degrees**. EPSG:4326 (WGS 84) is the most
-  common one.
-- A **projected CRS** flattens that model onto a plane and gives positions as
-  **x and y distances**, usually in **meters** (sometimes feet). Every
-  projected CRS is built on top of a geographic one.
+```{=html}
+<div class="widget" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;text-align:center">
+  <!-- Latitude: a cross-section through the poles -->
+  <svg viewBox="0 0 260 250" style="width:100%;max-width:300px;margin:auto">
+    <circle cx="130" cy="125" r="90" fill="#eef3f7" stroke="#33414d" stroke-width="1.5"/>
+    <line x1="30" y1="125" x2="230" y2="125" stroke="#7a8ca3" stroke-dasharray="4 3"/>
+    <line x1="130" y1="25" x2="130" y2="225" stroke="#7a8ca3" stroke-dasharray="4 3"/>
+    <line x1="130" y1="125" x2="187.85" y2="56.06" stroke="#d1495b" stroke-width="2.5"/>
+    <circle cx="187.85" cy="56.06" r="5" fill="#d1495b"/>
+    <path d="M165,125 A35,35 0 0,0 152.5,98.2" fill="none" stroke="#d1495b" stroke-width="2"/>
+    <text x="170" y="112" font-size="14" fill="#d1495b">φ</text>
+    <text x="130" y="18" font-size="12" text-anchor="middle" fill="#33414d">N</text>
+    <text x="130" y="242" font-size="12" text-anchor="middle" fill="#33414d">S</text>
+    <text x="232" y="120" font-size="11" text-anchor="end" fill="#33414d">equator</text>
+    <circle cx="130" cy="125" r="3" fill="#33414d"/>
+  </svg>
+  <!-- Longitude: looking down on the North Pole -->
+  <svg viewBox="0 0 260 250" style="width:100%;max-width:300px;margin:auto">
+    <circle cx="130" cy="125" r="90" fill="#eef3f7" stroke="#33414d" stroke-width="1.5"/>
+    <line x1="130" y1="125" x2="130" y2="215" stroke="#7a8ca3" stroke-width="2"/>
+    <line x1="130" y1="125" x2="207.9" y2="170" stroke="#1f5f8b" stroke-width="2.5"/>
+    <circle cx="207.9" cy="170" r="5" fill="#1f5f8b"/>
+    <path d="M130,160 A35,35 0 0,0 160.3,142.5" fill="none" stroke="#1f5f8b" stroke-width="2"/>
+    <text x="150" y="172" font-size="14" fill="#1f5f8b">λ</text>
+    <circle cx="130" cy="125" r="3" fill="#33414d"/>
+    <text x="130" y="115" font-size="11" text-anchor="middle" fill="#33414d">N pole</text>
+    <text x="130" y="232" font-size="11" text-anchor="middle" fill="#33414d">Greenwich (0°)</text>
+  </svg>
+  <div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;font-size:.95rem">
+    <div><b style="color:#d1495b">Latitude φ</b>: angle north or south of the equator, measured at Earth's center (side view)</div>
+    <div><b style="color:#1f5f8b">Longitude λ</b>: angle east or west of Greenwich (view from above the North Pole)</div>
+  </div>
+</div>
+```
 
-The key consequence: **a degree is not a fixed distance.** A degree of
-latitude is always about 111 km. A degree of longitude shrinks as you move
-toward the poles, because the meridians converge.
+- Units: **degrees** (angles, not distances)
+- Longitude −180° to 180°; latitude −90° to 90°
+- Examples: **WGS 84 (EPSG:4326)**, NAD83 (EPSG:4269)
+
+### Projected CRS: positions are distances on a flat grid
+
+```{=html}
+<div class="widget" style="text-align:center">
+  <svg viewBox="0 0 560 250" style="width:100%;max-width:640px">
+    <!-- Small globe with a patch highlighted -->
+    <circle cx="90" cy="125" r="70" fill="#eef3f7" stroke="#33414d" stroke-width="1.5"/>
+    <ellipse cx="90" cy="125" rx="70" ry="18" fill="none" stroke="#c3ced8"/>
+    <ellipse cx="90" cy="125" rx="30" ry="70" fill="none" stroke="#c3ced8"/>
+    <path d="M100,80 L130,78 L134,105 L104,108 Z" fill="#d1495b" fill-opacity=".35" stroke="#d1495b"/>
+    <!-- Arrow: flatten -->
+    <path d="M170,125 L230,125" stroke="#33414d" stroke-width="2" marker-end="url(#arrowhead)"/>
+    <text x="200" y="115" font-size="12" text-anchor="middle" fill="#33414d">flatten</text>
+    <defs>
+      <marker id="arrowhead" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="#33414d"/>
+      </marker>
+    </defs>
+    <!-- Flat grid in meters -->
+    <g transform="translate(260,30)">
+      <rect x="0" y="0" width="260" height="180" fill="#fff" stroke="#33414d"/>
+      <g stroke="#e3e8ee">
+        <line x1="52" y1="0" x2="52" y2="180"/><line x1="104" y1="0" x2="104" y2="180"/>
+        <line x1="156" y1="0" x2="156" y2="180"/><line x1="208" y1="0" x2="208" y2="180"/>
+        <line x1="0" y1="36" x2="260" y2="36"/><line x1="0" y1="72" x2="260" y2="72"/>
+        <line x1="0" y1="108" x2="260" y2="108"/><line x1="0" y1="144" x2="260" y2="144"/>
+      </g>
+      <line x1="0" y1="180" x2="270" y2="180" stroke="#33414d" stroke-width="1.5"/>
+      <line x1="0" y1="180" x2="0" y2="-8" stroke="#33414d" stroke-width="1.5"/>
+      <circle cx="0" cy="180" r="4" fill="#33414d"/>
+      <text x="4" y="198" font-size="11" fill="#33414d">origin (0, 0)</text>
+      <circle cx="160" cy="70" r="5" fill="#d1495b"/>
+      <line x1="160" y1="70" x2="160" y2="180" stroke="#d1495b" stroke-dasharray="4 3"/>
+      <line x1="160" y1="70" x2="0" y2="70" stroke="#d1495b" stroke-dasharray="4 3"/>
+      <text x="160" y="214" font-size="12" text-anchor="middle" fill="#d1495b">x = 77,000 m (easting)</text>
+      <text x="6" y="62" font-size="12" fill="#d1495b">y = 75,000 m (northing)</text>
+    </g>
+  </svg>
+</div>
+```
+
+- Flattens one part of the globe onto a plane (a **projection**)
+- Units: **meters** (sometimes feet), measured from the grid's **origin**
+- Built on top of a geographic CRS
+- Examples: **EPSG:2169** (Luxembourg), **EPSG:5070** (NLCD), UTM zones
+
+### A degree is not a fixed distance
+
+- 1° of latitude ≈ **111 km** everywhere
+- 1° of longitude **shrinks toward the poles**, because the meridians converge
 
 ::: {.callout-tip icon="false"}
 ## Predict
 
-How long is one degree of longitude at Luxembourg's latitude (about 49.6° N)?
-More or less than 100 km?
+How long is 1° of longitude at Luxembourg (49.6° N)? More or less than 100 km?
 :::
 
 ```{ojs}
 //| echo: false
 viewof lat = Inputs.range([0, 89], {
-  value: 38.9, step: 0.1, label: "Latitude (° N)"
+  value: 0.4, step: 0.1, label: "Latitude (° N)"
 })
 ```
 
@@ -149,26 +253,52 @@ viewof lat = Inputs.range([0, 89], {
 kmPerDegLat = 111.2
 kmPerDegLon = 111.2 * Math.cos(lat * Math.PI / 180)
 
-// A few reference places, to make the slider concrete
+// Reference places in Africa and Europe, so they all fit on one globe
 places = [
-  {name: "Equator", lat: 0},
-  {name: "Washington, DC", lat: 38.9},
-  {name: "Luxembourg", lat: 49.6},
-  {name: "Oslo", lat: 59.9},
-  {name: "Svalbard", lat: 78.2}
+  {name: "Libreville (equator)", lon: 9.45, lat: 0.4},
+  {name: "Cairo", lon: 31.24, lat: 30.0},
+  {name: "Luxembourg", lon: 6.13, lat: 49.6},
+  {name: "Oslo", lon: 10.75, lat: 59.9},
+  {name: "Svalbard", lon: 15.63, lat: 78.2}
 ]
 
 {
-  // Two horizontal bars, drawn to the same scale (111.2 km = full width)
-  const w = Math.min(width, 640);
+  const wide = width > 720;
+  const g = wide ? 300 : Math.min(width, 340);
+
+  // ---- Wireframe globe: graticule, the chosen parallel, and the places ----
+  const projection = d3.geoOrthographic().rotate([-15, -35]).fitExtent([[6, 6], [g - 6, g - 6]], {type: "Sphere"});
+  const path = d3.geoPath(projection);
+  const svg = d3.create("svg").attr("viewBox", [0, 0, g, g]).style("width", g + "px");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean).attr("stroke", col.ink);
+  svg.append("path").attr("d", path(land)).attr("fill", col.land).attr("fill-opacity", 0.6);
+  svg.append("path").attr("d", path(d3.geoGraticule().step([15, 15])()))
+    .attr("fill", "none").attr("stroke", col.grid).attr("stroke-width", 0.7);
+  // The full parallel at the slider's latitude: a smaller circle near the pole
+  const parallel = {type: "LineString", coordinates: d3.range(-180, 181, 2).map(x => [x, lat])};
+  svg.append("path").attr("d", path(parallel)).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2.5);
+  // A 10-degree stretch of longitude (red) and of latitude (gray), to compare
+  const seg = (a, b) => ({type: "LineString", coordinates: d3.range(0, 1.001, 0.05).map(t => [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])])});
+  svg.append("path").attr("d", path(seg([10, Math.min(lat, 79)], [20, Math.min(lat, 79)])))
+    .attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 7).attr("stroke-linecap", "round");
+  svg.append("path").attr("d", path(seg([-10, Math.min(lat, 79)], [-10, Math.min(lat, 79) + 10])))
+    .attr("fill", "none").attr("stroke", "#7a8ca3").attr("stroke-width", 7).attr("stroke-linecap", "round");
+  for (const p of places) {
+    const [x, y] = projection([p.lon, p.lat]);
+    svg.append("circle").attr("cx", x).attr("cy", y).attr("r", 4).attr("fill", col.ink);
+  }
+
+  // ---- Bars: 1 degree of latitude vs. 1 degree of longitude ----
+  const bw = wide ? Math.max(200, width - g - 60) : width - 20;
   const bar = (label, km, color) => html`
     <div style="margin:.35rem 0">
-      <div style="font-size:.9rem">${label}: <b>${km.toFixed(1)} km</b></div>
-      <div style="height:18px;width:${(km / kmPerDegLat) * w}px;background:${color};border-radius:3px"></div>
+      <div style="font-size:.95rem">${label}: <b>${km.toFixed(1)} km</b></div>
+      <div style="height:18px;width:${(km / kmPerDegLat) * bw}px;background:${color};border-radius:3px"></div>
     </div>`;
+
   // Buttons that move the slider. Built with DOM calls because Quarto's
   // html`` template doesn't attach functions as event handlers.
-  const near = places.map(p => {
+  const buttons = places.map(p => {
     const b = document.createElement("button");
     b.textContent = p.name;
     b.className = "btn btn-sm btn-outline-secondary";
@@ -180,20 +310,25 @@ places = [
     });
     return b;
   });
-  return html`<div class="widget">
-    ${bar("1° of latitude", kmPerDegLat, "#7a8ca3")}
-    ${bar("1° of longitude", kmPerDegLon, "#d1495b")}
-    <div style="margin-top:.5rem;font-size:.9rem">Jump to: ${near}</div>
+
+  return html`<div class="widget" style="display:${wide ? "grid" : "block"};grid-template-columns:${g}px 1fr;gap:1.5rem;align-items:center">
+    <div>${svg.node()}</div>
+    <div>
+      ${bar("1° of latitude (gray)", kmPerDegLat, "#7a8ca3")}
+      ${bar("1° of longitude (red)", kmPerDegLon, col.red)}
+      <div style="margin-top:.6rem;font-size:.9rem">Jump to: ${buttons}</div>
+      <div style="margin-top:.6rem;font-size:.85rem;color:#5f6b75">Thick segments on the globe span 10°. The red line is the full parallel at this latitude.</div>
+    </div>
   </div>`;
 }
 ```
 
-So a "square" one degree on a side is not square on the ground, and its area
-depends on where it is. That is why lengths, areas, and buffers measured
-directly in degrees are meaningless.
+- Lengths, areas, and buffers **in degrees are meaningless**
+- `sf` computes areas and distances on the globe for you (`st_area()` gives
+  m² even for lon/lat data)
+- Not every function does: a raster's cell size stays in degrees
 
-Now read what R tells you. Each object's CRS is in its printout, and there's a
-direct yes/no question you can ask:
+### Reading it in R
 
 ```{r}
 #| label: geographic-check
@@ -206,43 +341,161 @@ st_bbox(cantons)
 ext(elev_lux)
 ```
 
-The cantons span about 0.8 degrees east–west. The raster spans about 57,000
-meters. Same country, different units, so the numbers don't overlap. That is
-the whole story of section 1, and we'll come back to it.
-
-::: {.callout-note}
-## A helpful shortcut in sf
-
-When you ask `sf` for an area or distance on longitude/latitude data, it does
-the math on the globe and gives you meters (`st_area(cantons)` works). Don't
-count on every function being this careful. A raster's cell size, for example,
-stays in degrees.
-:::
+- Cantons span about **0.8 degrees** east–west
+- The raster spans about **57,000 meters**
+- Same country, different units, so the numbers **don't overlap** (section 1
+  explained)
 
 ---
 
 ## 3 Datums and ellipsoids
 
-Latitude and longitude only mean something once you say **which model of the
-Earth** they're measured on.
+- **Ellipsoid**: a smooth mathematical shape (size + flattening)
+- **Datum**: an ellipsoid + **where it's pinned** to the real Earth
+- Change the datum and the **same lat/lon** points to a **different spot**
 
-- The Earth is close to an **ellipsoid**: a sphere squashed at the poles. The
-  equatorial radius is about 21 km longer than the polar radius.
-- An **ellipsoid** is the mathematical shape (its size and flattening).
-- A **datum** is an ellipsoid *plus* how it is pinned to the real Earth: where
-  its center is and how it's oriented.
+```{ojs}
+//| echo: false
+datumSteps = [
+  "1 · The real Earth",
+  "2 · An ellipsoid",
+  "3 · NAD27: pinned in Kansas",
+  "4 · Satellites",
+  "5 · WGS 84: Earth-centered"
+]
+viewof datumStep = Inputs.radio(datumSteps, {value: datumSteps[0], label: "Step"})
+```
 
-Change the datum and the same coordinates point to a slightly different spot
-on the ground.
+```{ojs}
+//| echo: false
+// ---- Datum animation: geometry, built once. A separate cell (below)
+// moves things around when the step changes, with transitions. ----
+datumGeom = {
+  const W = 640, H = 380;
+  const earth = {x: 430, y: 195};             // Earth's center of mass
+  // The lumpy "real" Earth (a geoid, hugely exaggerated): a wobbly radius
+  const rEarth = th => 118 * (1 + 0.05 * Math.sin(3 * th + 0.5) + 0.035 * Math.cos(5 * th) + 0.02 * Math.sin(8 * th + 1));
+  const earthPath = d3.line().curve(d3.curveCardinalClosed)(
+    d3.range(0, 2 * Math.PI, Math.PI / 60).map(th => [earth.x + rEarth(th) * Math.cos(th), earth.y - 0.9 * rEarth(th) * Math.sin(th)])
+  );
+  // Meades Ranch, Kansas: a point on the upper left of the cross-section
+  const thPin = 125 * Math.PI / 180;
+  const pin = [earth.x + rEarth(thPin) * Math.cos(thPin), earth.y - 0.9 * rEarth(thPin) * Math.sin(thPin)];
+  // Clarke 1866 (NAD27): placed so its surface passes through the pin
+  const nad27 = {rx: 100, ry: 82};
+  nad27.x = pin[0] - nad27.rx * Math.cos(thPin);
+  nad27.y = pin[1] + nad27.ry * Math.sin(thPin);
+  // WGS 84: centered on Earth's center of mass, a best fit everywhere
+  const wgs84 = {rx: 121, ry: 104, x: earth.x, y: earth.y};
+  const start = {rx: 112, ry: 94, x: 140, y: 195};  // ellipsoid parked on the left
+  return {W, H, earth, earthPath, pin, nad27, wgs84, start};
+}
+
+datumSvg = {
+  const {W, H, earth, earthPath, pin, start} = datumGeom;
+  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "720px");
+
+  // Movement uses CSS transitions (set by the step cell below), which run in
+  // every browser without a JavaScript animation loop
+  const fade = "opacity 1s ease";
+  const glide = "transform 1.4s ease, opacity 1s ease";
+
+  // Satellite orbit (dashed) and a satellite circling Earth's center
+  const sat = svg.append("g").attr("id", "sat").style("opacity", 0).style("transition", fade);
+  sat.append("circle").attr("cx", earth.x).attr("cy", earth.y).attr("r", 170)
+    .attr("fill", "none").attr("stroke", "#9aa5ad").attr("stroke-dasharray", "3 5");
+  const craft = sat.append("g");
+  craft.append("rect").attr("x", earth.x - 6).attr("y", earth.y - 176).attr("width", 12).attr("height", 12).attr("fill", col.ink);
+  craft.append("rect").attr("x", earth.x - 26).attr("y", earth.y - 173).attr("width", 18).attr("height", 6).attr("fill", col.blue);
+  craft.append("rect").attr("x", earth.x + 8).attr("y", earth.y - 173).attr("width", 18).attr("height", 6).attr("fill", col.blue);
+  craft.append("animateTransform").attr("attributeName", "transform").attr("type", "rotate")
+    .attr("from", `0 ${earth.x} ${earth.y}`).attr("to", `-360 ${earth.x} ${earth.y}`)
+    .attr("dur", "9s").attr("repeatCount", "indefinite");
+
+  // The lumpy Earth and its center of mass
+  svg.append("path").attr("d", earthPath).attr("fill", "#cfe0d2").attr("stroke", col.green).attr("stroke-width", 2);
+  svg.append("g").attr("id", "earthCenter").call(g => {
+    g.append("path").attr("d", `M${earth.x - 7},${earth.y}h14M${earth.x},${earth.y - 7}v14`).attr("stroke", col.green).attr("stroke-width", 2.5);
+    g.append("text").attr("x", earth.x + 10).attr("y", earth.y + 18).attr("font-size", 12).attr("fill", col.green).text("center of mass");
+  });
+
+  // Ghost of the NAD27 ellipsoid, shown in the last step for comparison
+  const {nad27} = datumGeom;
+  svg.append("ellipse").attr("id", "ghost").attr("fill", "none").attr("stroke", col.red)
+    .attr("stroke-dasharray", "5 4")
+    .attr("cx", nad27.x).attr("cy", nad27.y).attr("rx", nad27.rx).attr("ry", nad27.ry)
+    .style("opacity", 0).style("transition", fade);
+
+  // The ellipsoid, with its semi-major (a) and semi-minor (b) axes.
+  // The outer group moves it; the inner group scales it to each datum's size
+  // (non-scaling-stroke keeps the outline the same thickness).
+  const ell = svg.append("g").attr("id", "ell")
+    .style("opacity", 0).style("transform", `translate(${start.x}px, ${start.y}px)`).style("transition", glide);
+  ell.append("g").attr("id", "shape").style("transition", glide)
+    .append("ellipse").attr("rx", start.rx).attr("ry", start.ry)
+    .attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2.5).attr("vector-effect", "non-scaling-stroke");
+  ell.append("circle").attr("r", 3.5).attr("fill", col.red);
+  const axes = ell.append("g").attr("id", "axes").style("transition", fade);
+  axes.append("line").attr("x2", start.rx).attr("stroke", col.red).attr("stroke-width", 1.5);
+  axes.append("line").attr("y2", -start.ry).attr("stroke", col.red).attr("stroke-width", 1.5);
+  axes.append("text").attr("x", start.rx / 2).attr("y", 16).attr("text-anchor", "middle").attr("font-size", 14).attr("fill", col.red).text("a");
+  axes.append("text").attr("x", 8).attr("y", -start.ry / 2).attr("font-size", 14).attr("fill", col.red).text("b");
+  axes.append("text").attr("x", 0).attr("y", start.ry + 26).attr("text-anchor", "middle").attr("font-size", 12).attr("fill", col.ink)
+    .text("a = equatorial radius, b = polar radius");
+
+  // Meades Ranch pin
+  const pinG = svg.append("g").attr("id", "pin").style("opacity", 0).style("transition", fade);
+  pinG.append("path").attr("d", `M${pin[0]},${pin[1]} l-7,-16 a8,8 0 1,1 14,0 z`).attr("fill", col.red).attr("stroke", "#fff");
+  pinG.append("text").attr("x", pin[0] - 14).attr("y", pin[1] - 24).attr("text-anchor", "end").attr("font-size", 12).attr("fill", col.ink)
+    .text("Meades Ranch, Kansas");
+
+  // The figure plus a caption line (filled in by the step cell below)
+  return html`<div class="widget" style="text-align:center">${svg.node()}
+    <div class="datum-caption" style="font-size:1.05rem;font-weight:500;margin-top:.3rem"></div></div>`;
+}
+```
+
+```{ojs}
+//| echo: false
+// ---- Move things for the chosen step (re-runs when the step changes) ----
+{
+  const s = datumSteps.indexOf(datumStep) + 1;
+  const {nad27, wgs84, start} = datumGeom;
+  const svg = d3.select(datumSvg);
+
+  // Where the ellipsoid sits and how big it is at each step. Setting these
+  // styles triggers the CSS transitions defined when the figure was built.
+  const e = s <= 2 ? start : s <= 4 ? nad27 : wgs84;
+  svg.select("#ell").style("opacity", s >= 2 ? 1 : 0)
+    .style("transform", `translate(${e.x}px, ${e.y}px)`);
+  svg.select("#shape").style("transform", `scale(${e.rx / start.rx}, ${e.ry / start.ry})`);
+  svg.select("#axes").style("opacity", s === 2 ? 1 : 0);
+  svg.select("#pin").style("opacity", s >= 3 ? 1 : 0);
+  svg.select("#sat").style("opacity", s >= 4 ? 1 : 0);
+  svg.select("#ghost").style("opacity", s === 5 ? 0.8 : 0);
+
+  const captions = [
+    "The real Earth is lumpy (shape hugely exaggerated)",
+    "An ellipsoid: a smooth shape we can do math on",
+    "NAD27 (Clarke 1866): fits North America, pinned at one survey point. Its center is NOT Earth's center",
+    "Satellites orbit Earth's center of mass, so we can now locate that center",
+    "WGS 84: centered on Earth's center of mass. Dashed = NAD27. Same lat/lon, different place"
+  ];
+  svg.select(".datum-caption").text(captions[s - 1]);
+  // Nothing to display from this cell (the figure lives in the cell above)
+  return html`<span></span>`;
+}
+```
 
 | Datum | Ellipsoid | Pinned to | Where you'll meet it |
 |---|---|---|---|
-| NAD27 | Clarke 1866 | A survey point in Kansas (Meades Ranch) | Old maps and surveys |
-| NAD83 | GRS 80 | Earth's center (fixed to the North American plate) | US Census / TIGER data, state agencies |
-| WGS 84 | WGS 84 | Earth's center (global) | GPS, most web data, EPA TRI |
+| NAD27 | Clarke 1866 | Survey point in Kansas (Meades Ranch) | Old maps and surveys |
+| NAD83 | GRS 80 | Earth's center (moves with North America) | Census / TIGER, state agencies |
+| WGS 84 | WGS 84 | Earth's center (global) | GPS, web data, EPA TRI |
 
-Let's measure how much a datum matters. Take one set of coordinates for the AU
-campus and label it with two datums:
+### How much does it matter?
+
+Same coordinates for the AU campus, labeled NAD27 vs. NAD83:
 
 ```{r}
 #| label: datum-shift
@@ -260,72 +513,151 @@ au_nad27_converted <- st_transform(au_nad27, 4269)
 st_distance(au_nad83, au_nad27_converted)
 ```
 
-About 28 meters, which is enough to put a facility on the wrong side of a
-street or a census tract boundary. Between **NAD83 and WGS 84**, the difference
-in the US is only about a meter or two. That rarely matters for tract-level
-analysis or 30 m rasters.
-
-But R can't know what precision *your* question needs, so it treats any
-difference in CRS as a mismatch. That's why, in the asthma problem, the EPA TRI
-points (WGS 84) still have to be transformed before they can be joined to the
-Census tracts (NAD83).
+- NAD27 vs. NAD83: **≈ 28 m**, enough to cross a street or a tract boundary
+- NAD83 vs. WGS 84: **≈ 1–2 m** in the US, rarely matters for tracts or 30 m
+  rasters
+- R treats **any** CRS difference as a mismatch, so TRI points (WGS 84) must
+  still be transformed to join Census tracts (NAD83)
 
 ::: {.callout-note collapse="true"}
 ## Behind the scenes: datum shifts need extra files
 
-Accurate NAD27 → NAD83 conversion uses a grid of measured shifts. That grid is
-a separate download, not built into R. If PROJ (the library under `sf` and
-`terra`) can't find it, it falls back to a "ballpark" conversion. That can
-mean **no shift at all, with no error**. This page was built with
-`sf_proj_network(TRUE)`, which lets PROJ fetch grids from the internet as
-needed. You'll rarely need NAD27 in this course. The lesson is the general
-one: a step that runs without error isn't proof that it did what you think.
+- Accurate NAD27 → NAD83 conversion uses a grid of measured shifts, downloaded
+  separately
+- If PROJ (the library under `sf` and `terra`) can't find it, it falls back to
+  a "ballpark" conversion, which can mean **zero shift, no error**
+- This page was built with `sf_proj_network(TRUE)`, which lets PROJ fetch grids
+  as needed
+- The general lesson: running without an error isn't proof it did what you
+  think
 :::
 
 ---
 
 ## 4 Projections: flattening is a trade
 
-You can't flatten an orange peel without stretching or tearing it. Map
-projections are systematic ways of doing that stretching. They come in
-**families**, named after the flat surface the globe is projected onto:
+### Families: what you project onto
 
-- **Cylindrical**: wrap a cylinder around the globe (Mercator, UTM).
-- **Conic**: set a cone on top of it (Albers, Lambert Conformal Conic). Good
-  for mid-latitude regions that are wider than they are tall, like the US or
-  Maryland.
-- **Azimuthal**: touch a flat plane to one point (polar maps, "distance from
-  here" maps).
+```{ojs}
+//| echo: false
+{
+  // Three schematic diagrams (sphere + surface, with projection rays),
+  // each above the real graticule that family produces.
+  const pw = 220, ph = 340;
+  const cx = 110, cy = 110, r = 55;
 
-Each projection protects some properties and gives up others:
+  function base(svg) {
+    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", r).attr("fill", col.ocean).attr("stroke", col.ink).attr("stroke-width", 1.5);
+    svg.append("ellipse").attr("cx", cx).attr("cy", cy).attr("rx", r).attr("ry", 10).attr("fill", "none").attr("stroke", col.grid);
+    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", 2.5).attr("fill", col.ink);
+  }
+  // A ray from the sphere's center, through the sphere, to the surface
+  function ray(svg, x2, y2) {
+    const a = Math.atan2(y2 - cy, x2 - cx);
+    svg.append("line").attr("x1", cx).attr("y1", cy).attr("x2", x2).attr("y2", y2).attr("stroke", col.orange).attr("stroke-width", 1.3);
+    svg.append("circle").attr("cx", cx + r * Math.cos(a)).attr("cy", cy + r * Math.sin(a)).attr("r", 3).attr("fill", col.orange);
+    svg.append("circle").attr("cx", x2).attr("cy", y2).attr("r", 3.5).attr("fill", col.red);
+  }
+  // The graticule this family produces, drawn in the lower part of the panel
+  function grat(svg, projection) {
+    const box = [[20, 215], [pw - 20, ph - 30]];
+    projection.fitExtent(box, {type: "Sphere"});
+    const path = d3.geoPath(projection);
+    svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean).attr("stroke", col.ink);
+    svg.append("path").attr("d", path(land)).attr("fill", col.land);
+    svg.append("path").attr("d", path(d3.geoGraticule().step([30, 30])())).attr("fill", "none").attr("stroke", col.grid);
+  }
+  function panel(title, note, draw, projection) {
+    const svg = d3.create("svg").attr("viewBox", [0, 0, pw, ph]).style("width", "100%").style("max-width", "260px");
+    draw(svg);
+    grat(svg, projection);
+    svg.append("text").attr("x", pw / 2).attr("y", ph - 8).attr("text-anchor", "middle").attr("font-size", 12).attr("fill", col.ink).text(note);
+    return html`<div style="text-align:center"><div style="font-weight:600">${title}</div>${svg.node()}</div>`;
+  }
 
-- **Conformal**: preserves **shape** (angles) locally. Areas get distorted.
-- **Equal-area**: preserves **area**. Shapes get distorted.
-- **Equidistant**: preserves **distance**, but only from one point or along
-  certain lines.
-- **Azimuthal**: preserves **direction** from the center point.
+  const cylinder = panel("Cylindrical", "touches along the equator", svg => {
+    svg.append("line").attr("x1", cx - r).attr("y1", 20).attr("x2", cx - r).attr("y2", 200).attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("line").attr("x1", cx + r).attr("y1", 20).attr("x2", cx + r).attr("y2", 200).attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", 20).attr("rx", r).attr("ry", 9).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", 200).attr("rx", r).attr("ry", 9).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    base(svg);
+    svg.append("ellipse").attr("cx", cx).attr("cy", cy).attr("rx", r).attr("ry", 10).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2);
+    ray(svg, cx + r, cy - r * Math.tan(30 * Math.PI / 180));
+    ray(svg, cx + r, cy - r * Math.tan(50 * Math.PI / 180));
+    ray(svg, cx - r, cy + r * Math.tan(35 * Math.PI / 180));
+  }, d3.geoEquirectangular());
 
-**No flat map preserves all of these.** In particular, a map can't be both
-conformal and equal-area. So you choose a projection by asking what your
-analysis *measures*.
+  const cone = panel("Conic", "touches along one parallel", svg => {
+    // Cone tangent to the sphere at 35° N; apex on the axis above the pole
+    const phi = 35 * Math.PI / 180;
+    const tx = cx + r * Math.cos(phi), ty = cy - r * Math.sin(phi);
+    const apexY = ty - (tx - cx) / Math.tan(phi);
+    const baseY = 165, baseX = tx + (baseY - ty) * Math.tan(phi);
+    base(svg);
+    svg.append("path").attr("d", `M${2 * cx - baseX},${baseY} L${cx},${apexY} L${baseX},${baseY}`).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", baseY).attr("rx", baseX - cx).attr("ry", 11).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", ty).attr("rx", tx - cx).attr("ry", 7).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2);
+    // Rays hit the cone's side: intersect each ray with the cone line
+    for (const deg of [15, 55]) {
+      const a = -deg * Math.PI / 180;
+      const dx = Math.cos(a), dy = Math.sin(a);
+      // Cone side: from apex (cx, apexY) toward (baseX, baseY)
+      const ux = baseX - cx, uy = baseY - apexY;
+      const den = dx * uy - dy * ux;
+      const s = ((cx - cx) * uy - (apexY - cy) * ux) / den;
+      ray(svg, cx + s * dx, cy + s * dy);
+    }
+  }, d3.geoConicEqualArea().parallels([30, 50]));
+
+  const plane = panel("Azimuthal (planar)", "touches at one point", svg => {
+    base(svg);
+    const py = cy - r;
+    svg.append("path").attr("d", `M${cx - 85},${py + 10} L${cx - 45},${py - 10} L${cx + 85},${py - 10} L${cx + 45},${py + 10} Z`)
+      .attr("fill", col.blue).attr("fill-opacity", 0.08).attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("circle").attr("cx", cx).attr("cy", py).attr("r", 4).attr("fill", col.red);
+    for (const deg of [60, 115]) {
+      const a = deg * Math.PI / 180;
+      ray(svg, cx + (cy - py) / Math.tan(a), py);
+    }
+  }, d3.geoAzimuthalEquidistant().rotate([0, -90]));
+
+  return html`<div class="widget" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem">${cylinder}${cone}${plane}</div>`;
+}
+```
+
+- **Red** = where the surface touches the globe: **least distortion** there
+- Distortion **grows** with distance from the red line or point
+- Conic suits mid-latitude areas wider than tall: the **US, Maryland**
+
+### Properties: what a projection preserves
+
+**First choice: pick one (no map can do both)**
+
+- **Equal-area**: areas correct, shapes stretched
+- **Conformal**: local shapes and angles correct, areas stretched
+- Or a **compromise**: neither exactly, both errors kept moderate (good for
+  world maps to look at)
+
+**Extras: true only from one point or along certain lines**
+
+- **Equidistant**: distances from the center point are correct
+- **Azimuthal**: directions from the center point are correct (all planar
+  projections have this, hence the family name)
+- Extras combine with the first choice: e.g. Lambert *azimuthal equal-area*
+
+**Choose by what your analysis measures**
+
+### Explore: distortion across projections
 
 ::: {.callout-tip icon="false"}
 ## Predict
 
-The red circles below are all the same size on the globe (radius 4°). On the
-Mercator map, how will the circles near the poles compare with the circles at
-the equator? What about on Equal Earth?
+The red circles are all the same size on the globe. On Mercator, how will the
+polar circles compare with those at the equator? On Equal Earth?
 :::
 
 ```{ojs}
 //| echo: false
-// ---- Data: world countries (Natural Earth via the world-atlas package) ----
-tc = require("topojson-client@3.1.0")
-worldTopo = FileAttachment("countries-110m.json").json()
-land = tc.feature(worldTopo, worldTopo.objects.land)
-countries = tc.feature(worldTopo, worldTopo.objects.countries).features
-
-// ---- Shared geometry for the projection explorer ----
 // Tissot circles: identical 4-degree circles on a 30 x 15 degree grid
 tissot = {
   const circles = [];
@@ -337,80 +669,77 @@ tissot = {
   return {type: "GeometryCollection", geometries: circles};
 }
 
-// The shortest route on the globe (a great circle) from DC to London
-route = ({type: "LineString", coordinates: [[-77.04, 38.90], [-0.13, 51.51]]})
-
-// Boxes to fit maps to. Mercator can't show the poles (they're infinitely
-// far away), so its world view stops at 60° S and 84° N.
-naBox = d3.geoGraticule().extent([[-128, 18], [-62, 56]]).outline()
-mercBox = d3.geoGraticule().extent([[-180, -60], [180, 84]]).outline()
-fitTarget = view => view === "na" ? naBox : view === "merc" ? mercBox : {type: "Sphere"}
+// Two routes from DC to London. Great circle = shortest path on the globe.
+// Rhumb line = constant compass bearing: a straight line on Mercator, so we
+// build it by drawing a straight line in Mercator space and un-projecting it.
+dc = [-77.04, 38.90]
+london = [-0.13, 51.51]
+greatCircle = ({type: "LineString", coordinates: [dc, london]})
+rhumbLine = {
+  const m = d3.geoMercator();
+  const [x0, y0] = m(dc), [x1, y1] = m(london);
+  const coords = d3.range(0, 1.0001, 0.01).map(t => m.invert([x0 + t * (x1 - x0), y0 + t * (y1 - y0)]));
+  return {type: "LineString", coordinates: coords};
+}
 
 // ---- The projections on offer, with the facts shown in the info card ----
 projections = new Map([
   ["Equirectangular (plain lon/lat)", {
-    make: () => d3.geoEquirectangular(),
-    view: "world", family: "Cylindrical",
-    keeps: "Distance along meridians only",
+    make: () => d3.geoEquirectangular(), view: "world", family: "Cylindrical",
+    keeps: "Neither (distance along meridians only)",
     gives: "Area and shape, badly near the poles",
     epsg: "What you get when you plot EPSG:4326 data as x/y",
-    use: "Quick looks. Not for measuring anything."
+    use: "Quick looks. Not for measuring."
   }],
   ["Mercator", {
-    make: () => d3.geoMercator(),
-    view: "merc", family: "Cylindrical",
-    keeps: "Shape (conformal); compass directions are straight lines",
+    make: () => d3.geoMercator(), view: "merc", family: "Cylindrical",
+    keeps: "Conformal: shapes and angles",
     gives: "Area: grows rapidly toward the poles",
     epsg: "3857 (Web Mercator, used by web maps), 3395",
     use: "Navigation, web basemaps. Never for area."
   }],
   ["Equal Earth", {
-    make: () => d3.geoEqualEarth(),
-    view: "world", family: "Pseudocylindrical",
-    keeps: "Area (equal-area)",
+    make: () => d3.geoEqualEarth(), view: "world", family: "Pseudocylindrical",
+    keeps: "Equal-area",
     gives: "Shape, especially near the edges",
     epsg: "8857",
-    use: "World maps of anything per area: density, rates, land cover."
+    use: "World maps of anything per area."
   }],
   ["Albers Equal Area Conic (US)", {
     make: () => d3.geoConicEqualArea().parallels([29.5, 45.5]).rotate([96, 0]),
-    view: "na", family: "Conic",
-    keeps: "Area (equal-area)",
+    view: "na", family: "Conic", keeps: "Equal-area",
     gives: "Shape, slightly, away from the two standard parallels",
     epsg: "5070 (NAD83 / Conus Albers, used by NLCD)",
     use: "Areas and densities across the US."
   }],
   ["Lambert Conformal Conic (Maryland)", {
     make: () => d3.geoConicConformal().parallels([38.3, 39.45]).rotate([77, 0]),
-    view: "na", family: "Conic",
-    keeps: "Shape (conformal)",
+    view: "na", family: "Conic", keeps: "Conformal",
     gives: "Area, growing away from Maryland's latitudes",
-    epsg: "26985 (NAD83 / Maryland, meters), 2248 (same, US feet)",
-    use: "State Plane: Maryland agency data, local measurement."
+    epsg: "26985 (NAD83 / Maryland, m), 2248 (same, US feet)",
+    use: "State Plane: Maryland agency data."
   }],
   ["Transverse Mercator (UTM zone 18N)", {
     make: () => d3.geoTransverseMercator().rotate([75, 0]),
-    view: "na", family: "Cylindrical (turned sideways)",
-    keeps: "Shape (conformal)",
-    gives: "Scale grows east and west of the central meridian (75° W)",
+    view: "na", family: "Cylindrical (turned sideways)", keeps: "Conformal",
+    gives: "Scale grows east and west of 75° W",
     epsg: "26918 (NAD83 / UTM 18N), 32618 (WGS 84 / UTM 18N)",
-    use: "Distances and buffers within a 6°-wide zone (DC, MD, VA)."
+    use: "Distances and buffers in DC, MD, VA."
   }],
   ["Azimuthal Equidistant (centered on DC)", {
     make: () => d3.geoAzimuthalEquidistant().rotate([77.04, -38.9]),
     view: "world", family: "Azimuthal",
-    keeps: "Distance and direction from the center point (DC)",
-    gives: "Area and shape, worst far from the center",
-    epsg: "No standard code; defined around any center you choose",
-    use: "\"How far is everything from here?\" maps."
+    keeps: "Distance and direction from DC",
+    gives: "Area and shape, worst far from DC",
+    epsg: "No standard code; defined around any center",
+    use: "\"How far is everything from here?\""
   }],
   ["Orthographic (a view of the globe)", {
-    make: () => d3.geoOrthographic().rotate([77.04, -38.9]),
-    view: "world", family: "Azimuthal (perspective)",
-    keeps: "Looks like the globe from space",
-    gives: "Shows only half the Earth; area and distance squeezed at the edge",
+    make: () => d3.geoOrthographic().rotate([77.04, -38.9]), view: "world",
+    family: "Azimuthal (perspective)", keeps: "Looks like the globe from space",
+    gives: "Shows only half the Earth",
     epsg: "Rarely used for analysis",
-    use: "Visual reference: compare the other maps with this one."
+    use: "Reference: compare the others with this one."
   }]
 ])
 ```
@@ -420,8 +749,8 @@ projections = new Map([
 viewof projName = Inputs.select([...projections.keys()], {
   label: "Projection", value: "Mercator"
 })
-viewof layers = Inputs.checkbox(["Tissot circles", "Route: DC → London"], {
-  value: ["Tissot circles", "Route: DC → London"]
+viewof layers = Inputs.checkbox(["Tissot circles", "Routes: DC → London"], {
+  value: ["Tissot circles"]
 })
 ```
 
@@ -429,33 +758,31 @@ viewof layers = Inputs.checkbox(["Tissot circles", "Route: DC → London"], {
 //| echo: false
 {
   const p = projections.get(projName);
-  // Map uses the full page width (best when projected in class); the info
-  // card sits underneath it
   const w = width;
   const h = Math.round(w * 0.58);
-
-  // Build the projection and fit it to the world, Mercator's box, or North
-  // America. clipExtent keeps conic/transverse maps from drawing off-screen.
+  // Fit to the world, Mercator's box, or North America. clipExtent keeps
+  // conic and transverse maps from drawing far off-screen.
   const projection = p.make()
     .fitExtent([[8, 8], [w - 8, h - 8]], fitTarget(p.view))
     .clipExtent([[0, 0], [w, h]]);
   const path = d3.geoPath(projection);
 
   const svg = d3.create("svg").attr("viewBox", [0, 0, w, h]).style("width", "100%");
-  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", "#eef3f7");
-  svg.append("path").attr("d", path(d3.geoGraticule10()))
-    .attr("fill", "none").attr("stroke", "#cfd8e0").attr("stroke-width", 0.5);
-  svg.append("path").attr("d", path(land)).attr("fill", "#c9c4b8");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean);
+  svg.append("path").attr("d", path(d3.geoGraticule10())).attr("fill", "none").attr("stroke", col.grid).attr("stroke-width", 0.5);
+  svg.append("path").attr("d", path(land)).attr("fill", col.land);
   if (layers.includes("Tissot circles")) {
-    svg.append("path").attr("d", path(tissot))
-      .attr("fill", "#d1495b").attr("fill-opacity", 0.55);
+    svg.append("path").attr("d", path(tissot)).attr("fill", col.red).attr("fill-opacity", 0.55);
   }
-  if (layers.includes("Route: DC → London")) {
-    svg.append("path").attr("d", path(route))
-      .attr("fill", "none").attr("stroke", "#1f5f8b").attr("stroke-width", 2.5);
+  if (layers.includes("Routes: DC → London")) {
+    svg.append("path").attr("d", path(greatCircle)).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2.5);
+    svg.append("path").attr("d", path(rhumbLine)).attr("fill", "none").attr("stroke", col.orange).attr("stroke-width", 2.5).attr("stroke-dasharray", "6 4");
   }
-  svg.append("path").attr("d", path({type: "Sphere"}))
-    .attr("fill", "none").attr("stroke", "#9aa5ad");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", "none").attr("stroke", "#9aa5ad");
+
+  const legend = layers.includes("Routes: DC → London")
+    ? html`<div style="font-size:.9rem;margin-top:.3rem"><span style="color:${col.blue}">━━</span> great circle (shortest) &nbsp; <span style="color:${col.orange}">╍╍</span> rhumb line (constant compass bearing)</div>`
+    : "";
 
   // Each fact is its own <div> so the card can flow into columns
   const card = html`<dl class="proj-card">
@@ -465,27 +792,90 @@ viewof layers = Inputs.checkbox(["Tissot circles", "Route: DC → London"], {
     <div><dt>EPSG codes</dt><dd>${p.epsg}</dd></div>
     <div><dt>Use it for</dt><dd>${p.use}</dd></div>
   </dl>`;
-
-  return html`<div class="widget">${svg.node()}${card}</div>`;
+  return html`<div class="widget">${svg.node()}${legend}${card}</div>`;
 }
 ```
 
-Things to try:
+- **Mercator vs. Equal Earth**: which keeps the circles' *size*? Their *shape*?
+- **Two conic maps over Maryland**: nearly identical. Locally, a *sensible*
+  CRS matters more than the *perfect* one
 
-- **Mercator vs. Equal Earth:** compare the circles near the poles. Which map
-  keeps their *size* and which keeps their *shape*?
-- **The DC → London route** is the shortest path on the globe. On which
-  projection is it a straight line? (Hint: one of them measures distance from
-  DC.)
-- **The two conic maps** look almost the same over Maryland. Over that small
-  area, the distortion differences are tiny. This is why a sensible local CRS
-  matters much more than the "perfect" one.
+### Why sailors used Mercator
+
+```{ojs}
+//| echo: false
+// Route facts: distances and bearings for both routes (sphere, R = 6,371 km)
+routeFacts = {
+  const R = 6371, rad = Math.PI / 180;
+  const [l1, p1] = dc.map(v => v * rad), [l2, p2] = london.map(v => v * rad);
+  // Compass bearing from a to b at the start of a great circle
+  const bearing = (la1, ph1, la2, ph2) => {
+    const y = Math.sin(la2 - la1) * Math.cos(ph2);
+    const x = Math.cos(ph1) * Math.sin(ph2) - Math.sin(ph1) * Math.cos(ph2) * Math.cos(la2 - la1);
+    return (Math.atan2(y, x) / rad + 360) % 360;
+  };
+  const gcStart = bearing(l1, p1, l2, p2);
+  const gcEnd = (bearing(l2, p2, l1, p1) + 180) % 360;
+  const gcKm = d3.geoDistance(dc, london) * R;
+  // Rhumb line: one bearing the whole way
+  const dPsi = Math.log(Math.tan(Math.PI / 4 + p2 / 2) / Math.tan(Math.PI / 4 + p1 / 2));
+  const rhumbBearing = (Math.atan2(l2 - l1, dPsi) / rad + 360) % 360;
+  const rhumbKm = Math.abs((p2 - p1) / Math.cos(rhumbBearing * rad)) * R;
+  return {gcStart, gcEnd, gcKm, rhumbBearing, rhumbKm};
+}
+
+{
+  const wide = width > 700;
+  const w = wide ? Math.floor((width - 40) / 2) : width;
+  const h = Math.round(w * 0.8);
+  function panel(title, projection, fit) {
+    projection.fitExtent([[6, 6], [w - 6, h - 6]], fit).clipExtent([[0, 0], [w, h]]);
+    const path = d3.geoPath(projection);
+    const svg = d3.create("svg").attr("viewBox", [0, 0, w, h]).style("width", "100%");
+    svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean).attr("stroke", "#9aa5ad");
+    svg.append("path").attr("d", path(d3.geoGraticule10())).attr("fill", "none").attr("stroke", col.grid).attr("stroke-width", 0.5);
+    svg.append("path").attr("d", path(land)).attr("fill", col.land);
+    svg.append("path").attr("d", path(greatCircle)).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 3);
+    svg.append("path").attr("d", path(rhumbLine)).attr("fill", "none").attr("stroke", col.orange).attr("stroke-width", 3).attr("stroke-dasharray", "7 4");
+    for (const pt of [dc, london]) {
+      const [x, y] = projection(pt);
+      svg.append("circle").attr("cx", x).attr("cy", y).attr("r", 4.5).attr("fill", col.ink);
+    }
+    return html`<div><div style="font-weight:600">${title}</div>${svg.node()}</div>`;
+  }
+  // North Atlantic box for Mercator; the globe view centers on the Atlantic
+  const atlantic = d3.geoGraticule().extent([[-95, 20], [15, 65]]).outline();
+  const f = routeFacts;
+  return html`<div class="widget">
+    <div style="display:${wide ? "grid" : "block"};grid-template-columns:1fr 1fr;gap:1rem">
+      ${panel("Mercator", d3.geoMercator(), atlantic)}
+      ${panel("Globe (orthographic)", d3.geoOrthographic().rotate([40, -45]), {type: "Sphere"})}
+    </div>
+    <table class="table table-sm" style="margin-top:.75rem;font-size:.95rem">
+      <thead><tr><th></th><th>Distance</th><th>Compass bearing</th></tr></thead>
+      <tbody>
+        <tr><td style="color:${col.blue}"><b>Great circle</b> (solid)</td><td>${Math.round(f.gcKm).toLocaleString()} km</td>
+          <td>starts ${Math.round(f.gcStart)}°, ends ${Math.round(f.gcEnd)}°: <b>always changing</b></td></tr>
+        <tr><td style="color:${col.orange}"><b>Rhumb line</b> (dashed)</td><td>${Math.round(f.rhumbKm).toLocaleString()} km</td>
+          <td><b>${Math.round(f.rhumbBearing)}° the whole way</b></td></tr>
+      </tbody>
+    </table>
+  </div>`;
+}
+```
+
+- Mercator is **conformal**: the Tissot circles stay **round**, so angles are
+  true everywhere (only sizes change)
+- So a **constant compass bearing** (rhumb line) is a **straight line** on
+  Mercator
+- Navigator: draw a straight line, measure its angle, steer that bearing
+- The catch: the rhumb line is **longer**; the shortest route needs a
+  constantly changing bearing
 
 ### How big is Greenland, really?
 
-On Mercator, Greenland looks about as big as Africa. Drag it south and watch
-what happens on each map. Its true size never changes. The Democratic
-Republic of the Congo (DRC, in blue) stays put for comparison.
+- Drag Greenland south; the DRC (blue) stays put
+- Greenland's **true size never changes**
 
 ```{ojs}
 //| echo: false
@@ -523,12 +913,12 @@ movedGreenland = moveTo(greenland, targetLat)
     const projection = makeProjection().fitExtent([[6, 6], [w - 6, h - 6]], fitTarget(view));
     const path = d3.geoPath(projection);
     const svg = d3.create("svg").attr("viewBox", [0, 0, w, h]).style("width", "100%");
-    svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", "#eef3f7");
+    svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean);
     svg.append("path").attr("d", path(land)).attr("fill", "#dcd8cf");
     svg.append("path").attr("d", path(greenland))
-      .attr("fill", "none").attr("stroke", "#d1495b").attr("stroke-dasharray", "3 3");
-    svg.append("path").attr("d", path(drc)).attr("fill", "#1f5f8b");
-    svg.append("path").attr("d", path(movedGreenland)).attr("fill", "#d1495b");
+      .attr("fill", "none").attr("stroke", col.red).attr("stroke-dasharray", "3 3");
+    svg.append("path").attr("d", path(drc)).attr("fill", col.blue);
+    svg.append("path").attr("d", path(movedGreenland)).attr("fill", col.red);
     const looks = path.area(movedGreenland) / path.area(drc);
     return html`<div>
       <div style="font-weight:600">${title}</div>${svg.node()}
@@ -544,15 +934,13 @@ movedGreenland = moveTo(greenland, targetLat)
       ${panel("Mercator (conformal)", d3.geoMercator, "merc")}
       ${panel("Equal Earth (equal-area)", d3.geoEqualEarth, "world")}
     </div>
-    <p style="margin:.75rem 0 0">On the globe, Greenland is
-      <b>${truth.toFixed(2)}×</b> the size of the DRC, wherever you put it.
-      The dashed outline is where Greenland actually is.</p>
+    <p style="margin:.75rem 0 0">On the globe: Greenland = <b>${truth.toFixed(2)}×</b> the DRC, anywhere.
+      Dashed outline = Greenland's real location.</p>
   </div>`;
 }
 ```
 
-The same comparison in R, using the `world` dataset from the `spData`
-package:
+The same comparison in R:
 
 ```{r}
 #| label: areas
@@ -579,36 +967,32 @@ data.frame(country = two$name_long, area_globe, area_merc, area_ee)
 ::: {.callout-tip icon="false"}
 ## Discuss
 
-Each number above was computed correctly. Which one would you report as
-Greenland's area, and why? Which one would an AI report if it "helpfully"
-transformed your data to 3857 first?
+- Every number above was computed correctly. Which would you report?
+- What would an AI report if it "helpfully" transformed to 3857 first?
 :::
 
 ---
 
 ## 5 EPSG codes: names for CRSs
 
-Saying "NAD83, Lambert Conformal Conic, standard parallels 38.3° and 39.45°,
-meters" every time would be painful. The **EPSG registry** (now maintained by
-IOGP, the oil and gas producers' association) gives each complete CRS
-definition a number. One code bundles the datum, the ellipsoid, the
-projection and its parameters, and the units.
-
-Codes you'll meet in this course:
+- One number = a complete CRS: datum + ellipsoid + projection + units
+- Registry maintained by IOGP: [epsg.org](https://epsg.org) (official),
+  [epsg.io](https://epsg.io) (easier to search)
+- Look a code up: `https://epsg.io/` + the number
 
 | EPSG | Name | Type | Units | Where you'll see it |
 |---|---|---|---|---|
-| 4326 | WGS 84 | Geographic | degrees | GPS, most web data, EPA TRI |
-| 4269 | NAD83 | Geographic | degrees | Census tracts via `tidycensus` |
-| 4267 | NAD27 | Geographic | degrees | Old maps and surveys |
-| 3857 | WGS 84 / Pseudo-Mercator | Projected, cylindrical | "meters" (stretched) | Web map tiles. Display only. |
-| 5070 | NAD83 / Conus Albers | Projected, conic, equal-area | meters | NLCD; areas across the US |
-| 26918 | NAD83 / UTM zone 18N | Projected, transverse Mercator | meters | Distances in DC, MD, VA |
-| 26985 | NAD83 / Maryland | Projected, Lambert conic | meters | Maryland state data |
-| 2248 | NAD83 / Maryland (ftUS) | Projected, Lambert conic | **US feet** | Maryland county GIS. Check the units! |
+| [4326](https://epsg.io/4326) | WGS 84 | Geographic | degrees | GPS, web data, EPA TRI |
+| [4269](https://epsg.io/4269) | NAD83 | Geographic | degrees | Census tracts via `tidycensus` |
+| [4267](https://epsg.io/4267) | NAD27 | Geographic | degrees | Old maps and surveys |
+| [3857](https://epsg.io/3857) | WGS 84 / Pseudo-Mercator | Projected, cylindrical | "meters" (stretched) | Web map tiles. Display only |
+| [5070](https://epsg.io/5070) | NAD83 / Conus Albers | Projected, conic, equal-area | meters | NLCD; areas across the US |
+| [26918](https://epsg.io/26918) | NAD83 / UTM zone 18N | Projected, transverse Mercator | meters | Distances in DC, MD, VA |
+| [32618](https://epsg.io/32618) | WGS 84 / UTM zone 18N | Projected, transverse Mercator | meters | Same zone, WGS 84 datum (GPS data) |
+| [26985](https://epsg.io/26985) | NAD83 / Maryland | Projected, Lambert conic | meters | Maryland state data |
+| [2248](https://epsg.io/2248) | NAD83 / Maryland (ftUS) | Projected, Lambert conic | **US feet** | Maryland county GIS. Check units! |
 
-You don't need to memorize these. You need to know how to **read** one. Ask
-`terra` for a short description, or print the full definition with `sf`:
+### Reading a CRS in R
 
 ```{r}
 #| label: read-epsg
@@ -626,48 +1010,52 @@ crs("EPSG:26985", describe = TRUE)
 st_crs(26985)
 ```
 
+- First line: **PROJCRS** (projected) or **GEOGCRS** (geographic)
+- **DATUM / ELLIPSOID**: which model of the Earth
+- **METHOD**: which projection
+- **LENGTHUNIT**: meters or feet?
+
 ::: {.callout-tip icon="false"}
 ## Choose a CRS
 
-For each task, pick a CRS from the table and defend it in one sentence.
+Pick a code from the table and defend it in one sentence:
 
-1. Total impervious area in each Maryland county.
-2. Number of TRI facilities within 1 km of each census tract centroid in
-   Baltimore.
-3. Asthma prevalence compared across all 48 contiguous states.
-4. An interactive web map for a community group.
+1. Total impervious area in each Maryland county
+2. TRI facilities within 1 km of each Baltimore tract centroid
+3. Asthma prevalence across the 48 contiguous states
+4. An interactive web map for a community group
 :::
 
 ::: {.callout-note collapse="true"}
 ## Some defensible answers
 
-1. **5070** (equal-area) or **26985**. Within one state, State Plane's area
-   distortion is tiny, so either is defensible. Saying *why* is the point.
-2. **26985** or **26918**: both are in meters and accurate locally for
-   distance. Not 4326: a 1 km buffer needs meters.
-3. **5070**: equal-area across the whole country.
-4. **3857** for *display*. Do the analysis in a measuring CRS first, then
-   transform for the map.
+1. **5070** (equal-area) or **26985**: within one state, State Plane's area
+   distortion is tiny. The *why* is the point
+2. **26985**, **26918**, or **32618**: meters, accurate locally. Not 4326:
+   a 1 km buffer needs meters
+3. **5070**: equal-area across the country
+4. **3857** for *display*. Analyze in a measuring CRS, then transform for the
+   map
 :::
 
 ---
 
 ## 6 Back to the failure: fix it and check it
 
-Now the symptoms from section 1 make sense:
+**Why it failed**
 
-- The cantons' coordinates are around **6 and 50** (degrees). The raster's are
-  in the **tens of thousands** (meters).
-- `plot()` just draws numbers. It put the cantons in a tiny patch near
-  x = 6, y = 50, far outside the raster's extent, so nothing appeared on the
-  map.
-- `crop()` compared the two extents, found no overlap, and **stopped**.
-- `extract()` found no raster cells inside any polygon and returned `NaN`,
-  **without complaint**.
+- Cantons: coordinates around **6 and 50** (degrees)
+- Raster: coordinates in the **tens of thousands** (meters)
+- `plot()` just draws numbers: cantons landed far outside the raster's
+  extent
+- `crop()`: no overlap → **stops**
+- `extract()`: no cells inside any polygon → `NaN`, **silently**
 
-The fix is to put both layers in one CRS. Transform the **vector** to match
-the raster, not the other way around. Moving polygon vertices is exact, while
-reprojecting a raster has to resample cell values.
+**The fix**
+
+- Put both layers in **one CRS**
+- Transform the **vector** to match the raster: moving vertices is exact,
+  while reprojecting a raster resamples cell values
 
 ```{r}
 #| label: fix
@@ -704,11 +1092,10 @@ summary(cantons_lux$elev_mean)
 ::: {.callout-warning}
 ## Labeling is not converting
 
-`st_transform()` **converts** coordinates: the numbers change. `st_set_crs()`
-(or `st_crs(x) <- ...`) only **relabels** them: the numbers stay the same.
-Relabeling is correct only when a file has *no* CRS and you know what it
-should be. AI assistants sometimes suggest it as a "fix" for a mismatch.
-Here's what that does:
+- `st_transform()` **converts**: the numbers change
+- `st_set_crs()` / `st_crs(x) <- ...` only **relabels**: the numbers stay
+- Relabel only when a file has **no** CRS and you **know** what it should be
+- AI assistants sometimes suggest relabeling as a "fix" for a mismatch:
 
 ```{r}
 #| label: relabel-trap
@@ -717,9 +1104,9 @@ cantons_relabeled <- st_set_crs(cantons, 2169)
 st_bbox(cantons_relabeled)
 ```
 
-R warns you, and the bounding box gives it away: the "meters" are still 5.7
-to 50.2. In EPSG:2169, coordinates that small sit at the grid's origin, which
-is in France, about 120 km southwest of Luxembourg's center.
+- R warns, and the bbox gives it away: still 5.7 to 50.2
+- In EPSG:2169, numbers that small sit at the grid's origin: in France, about
+  120 km southwest of Luxembourg's center
 :::
 
 ---
@@ -736,49 +1123,56 @@ is in France, about 120 km southwest of Luxembourg's center.
 | Convert a raster | `project(r, crs)` | Resamples values (later session) |
 | Label a CRS-less file | `st_set_crs(x, crs)` | Only when the CRS is missing *and* known |
 
-The habit that ties it together: **check the CRS before any operation that
-combines two layers**, and check the result after. Most CRS mistakes don't
-produce errors. They produce wrong answers.
+- **Check the CRS before** combining two layers; **check the result after**
+- Most CRS mistakes don't produce errors. They produce **wrong answers**
 
 ## 8 Check yourself
 
 ::: {.callout-note collapse="true"}
 ## 1. A bounding box reads `xmin: 316268 ymin: 4295630 xmax: 334407 ymax: 4318264`. Degrees or meters? Projected or geographic?
 
-Meters, so it's projected. Longitudes only go to ±180 and latitudes to ±90.
-Numbers in the hundreds of thousands and millions look like UTM. (This is
-Washington, DC, in UTM zone 18N.)
+- Meters, so projected: longitudes stop at ±180, latitudes at ±90
+- Hundreds of thousands and millions look like UTM (this is Washington, DC,
+  in UTM zone 18N)
 :::
 
 ::: {.callout-note collapse="true"}
-## 2. Why did `extract()` return `NaN` instead of an error?
+## 2. `extract(r, polygons, fun = mean)` gives you some `NaN`s. Name three possible causes, and how you'd tell them apart.
 
-It did what it was asked: it looked for raster cells inside each polygon and
-found none, because the polygons sat far outside the raster's extent. An empty
-result isn't an error to the function. Only you know it's wrong, which is why
-you check for NAs after every extract.
+- **All NaN**: the layers don't overlap. Usually a **CRS mismatch** (today's
+  failure); sometimes the raster covers a different area. Compare `st_bbox()`
+  and `ext()`
+- **Some NaN, with `na.rm = TRUE`**: those polygons fall only on **no-data
+  cells** or **outside the raster's edge**. Plot the polygons on the raster
+  and look at where the NaN ones are
+- **Many NaN, without `na.rm = TRUE`**: any polygon that touches even **one
+  no-data cell** returns NaN. Here, 9 of 12 cantons did. Add `na.rm = TRUE`,
+  and decide whether a partial average is acceptable
 :::
 
 ::: {.callout-note collapse="true"}
-## 3. An AI's code calls `st_transform(tracts, 3857)` before computing `st_area()`. What's the problem?
+## 3. An AI suggests `st_transform(tri, 2263)` before buffering TRI facilities in Baltimore by 1,000. Look up [EPSG:2263](https://epsg.io/2263). What's wrong?
 
-Web Mercator inflates area by a factor that grows with latitude. At Maryland's
-latitude (about 39° N), that's about 1.66×, so every area would be about
-two-thirds too large. Use 5070 or 26985, or compute the area on the original lon/lat
-data.
+- It's **NAD83 / New York Long Island (ftUS)**: the wrong place, and the units
+  are **US feet**
+- A buffer of 1,000 would be 1,000 ft (about 305 m), not 1 km
+- Baltimore is outside its area of use, so distortion is larger too
+- Better: **26985** (Maryland, meters) or **26918 / 32618** (UTM 18N)
 :::
 
 ::: {.callout-note collapse="true"}
-## 4. TRI facilities are in EPSG:4326 and tracts are in EPSG:4269. The difference is about a meter. Why transform anyway?
+## 4. TRI facilities are in EPSG:4326 and tracts in EPSG:4269, about a meter apart. What happens if you `st_join()` them without transforming? Loud or silent?
 
-Because `sf` requires both layers to have the *same* CRS before it will join
-them, and it can't judge whether a meter matters for your question. Transform
-one to match the other (or both to a projected CRS you'll measure in) and the
-join runs.
+- **Loud**: `st_join()` stops with `st_crs(x) == st_crs(y) is not TRUE`
+- `sf` requires identical CRSs and can't judge whether a meter matters for your
+  question
+- Fix: transform one to match the other (or both to a projected CRS you'll
+  measure in)
+- Compare with `extract()` in section 1, which failed **silently**
 :::
 
 ## Further reading
 
 - *Geocomputation with R*, [Chapter 2.4: Coordinate Reference
   Systems](https://r.geocompx.org/spatial-class#crs-intro) and [Chapter 7:
-  Reprojecting geographic data](https://r.geocompx.org/reproj-geo-data).
+  Reprojecting geographic data](https://r.geocompx.org/reproj-geo-data)
