@@ -68,8 +68,8 @@ fitTarget = view => view === "na" ? naBox : view === "merc" ? mercBox : {type: "
 
 - Same failure as your homework, on new data: Luxembourg
 - Elevation raster + 12 cantons (districts), both included with `terra`
-- Scenario: the national mapping agency sends the elevation in its own grid,
-  **EPSG:2169**
+- Scenario: the national mapping agency sends the elevation in its own
+  national grid
 
 ```{r}
 #| label: libraries
@@ -143,44 +143,83 @@ bad
 
 ### Geographic CRS: positions are angles
 
-```{=html}
-<div class="widget" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;text-align:center">
-  <!-- Latitude: a cross-section through the poles -->
-  <svg viewBox="0 0 260 250" style="width:100%;max-width:300px;margin:auto">
-    <circle cx="130" cy="125" r="90" fill="#eef3f7" stroke="#33414d" stroke-width="1.5"/>
-    <line x1="30" y1="125" x2="230" y2="125" stroke="#7a8ca3" stroke-dasharray="4 3"/>
-    <line x1="130" y1="25" x2="130" y2="225" stroke="#7a8ca3" stroke-dasharray="4 3"/>
-    <line x1="130" y1="125" x2="187.85" y2="56.06" stroke="#d1495b" stroke-width="2.5"/>
-    <circle cx="187.85" cy="56.06" r="5" fill="#d1495b"/>
-    <path d="M165,125 A35,35 0 0,0 152.5,98.2" fill="none" stroke="#d1495b" stroke-width="2"/>
-    <text x="170" y="112" font-size="14" fill="#d1495b">φ</text>
-    <text x="130" y="18" font-size="12" text-anchor="middle" fill="#33414d">N</text>
-    <text x="130" y="242" font-size="12" text-anchor="middle" fill="#33414d">S</text>
-    <text x="232" y="120" font-size="11" text-anchor="end" fill="#33414d">equator</text>
-    <circle cx="130" cy="125" r="3" fill="#33414d"/>
-  </svg>
-  <!-- Longitude: looking down on the North Pole -->
-  <svg viewBox="0 0 260 250" style="width:100%;max-width:300px;margin:auto">
-    <circle cx="130" cy="125" r="90" fill="#eef3f7" stroke="#33414d" stroke-width="1.5"/>
-    <line x1="130" y1="125" x2="130" y2="215" stroke="#7a8ca3" stroke-width="2"/>
-    <line x1="130" y1="125" x2="207.9" y2="170" stroke="#1f5f8b" stroke-width="2.5"/>
-    <circle cx="207.9" cy="170" r="5" fill="#1f5f8b"/>
-    <path d="M130,160 A35,35 0 0,0 160.3,142.5" fill="none" stroke="#1f5f8b" stroke-width="2"/>
-    <text x="150" y="172" font-size="14" fill="#1f5f8b">λ</text>
-    <circle cx="130" cy="125" r="3" fill="#33414d"/>
-    <text x="130" y="115" font-size="11" text-anchor="middle" fill="#33414d">N pole</text>
-    <text x="130" y="232" font-size="11" text-anchor="middle" fill="#33414d">Greenwich (0°)</text>
-  </svg>
-  <div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;font-size:.95rem">
-    <div><b style="color:#d1495b">Latitude φ</b>: angle north or south of the equator, measured at Earth's center (side view)</div>
-    <div><b style="color:#1f5f8b">Longitude λ</b>: angle east or west of Greenwich (view from above the North Pole)</div>
-  </div>
-</div>
+```{ojs}
+//| echo: false
+viewof gLon = Inputs.range([-40, 85], {value: 40, step: 1, label: "Longitude (° E)"})
+viewof gLat = Inputs.range([-35, 80], {value: 45, step: 1, label: "Latitude (° N)"})
+```
+
+```{ojs}
+//| echo: false
+{
+  // A wireframe globe showing latitude and longitude as angles at Earth's center
+  const g = Math.min(width, 440);
+  const projection = d3.geoOrthographic().rotate([-25, -25]).fitExtent([[10, 10], [g - 10, g - 10]], {type: "Sphere"});
+  const path = d3.geoPath(projection);
+  const [cx, cy] = projection.translate();   // Earth's center, on screen
+
+  // Orthographic is a parallel projection, so a point a fraction k of the way
+  // from Earth's center to a surface point is drawn a fraction k of the way
+  // from the screen center to that point's projection
+  const inside = (lonlat, k) => {
+    const [x, y] = projection(lonlat);
+    return [cx + k * (x - cx), cy + k * (y - cy)];
+  };
+  const line = d3.line();
+  const along = (f, n = 40) => d3.range(0, 1.0001, 1 / n).map(f);
+
+  const svg = d3.create("svg").attr("viewBox", [0, 0, g, g]).style("width", g + "px").style("max-width", "100%");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean).attr("stroke", col.ink);
+  svg.append("path").attr("d", path(land)).attr("fill", col.land).attr("fill-opacity", 0.5);
+  svg.append("path").attr("d", path(d3.geoGraticule().step([15, 15])())).attr("fill", "none").attr("stroke", col.grid).attr("stroke-width", 0.7);
+
+  // Reference lines on the surface: the equator and Greenwich's meridian
+  const equator = {type: "LineString", coordinates: d3.range(-180, 181, 2).map(x => [x, 0])};
+  const greenwich = {type: "LineString", coordinates: d3.range(-90, 91, 2).map(y => [0, y])};
+  svg.append("path").attr("d", path(equator)).attr("fill", "none").attr("stroke", col.ink).attr("stroke-width", 1.5);
+  svg.append("path").attr("d", path(greenwich)).attr("fill", "none").attr("stroke", col.ink).attr("stroke-width", 1.5).attr("stroke-dasharray", "4 3");
+
+  // Surface arcs: longitude along the equator (blue), latitude up the meridian (red)
+  const lonArc = {type: "LineString", coordinates: along(t => [t * gLon, 0])};
+  const latArc = {type: "LineString", coordinates: along(t => [gLon, t * gLat])};
+  svg.append("path").attr("d", path(lonArc)).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 4);
+  svg.append("path").attr("d", path(latArc)).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 4);
+
+  // Radii from Earth's center to (0, 0), (lon, 0), and the point
+  for (const [p, c, dash] of [[[0, 0], col.ink, "4 3"], [[gLon, 0], col.blue, "4 3"], [[gLon, gLat], col.red, null]]) {
+    svg.append("path").attr("d", line([[cx, cy], projection(p)])).attr("stroke", c).attr("stroke-width", 1.8).attr("stroke-dasharray", dash);
+  }
+
+  // The angles themselves, drawn inside the globe near its center
+  svg.append("path").attr("d", line(along(t => inside([t * gLon, 0], 0.3)))).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2.5);
+  svg.append("path").attr("d", line(along(t => inside([gLon, t * gLat], 0.3)))).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2.5);
+  const [lx, ly] = inside([gLon / 2, 0], 0.42);
+  const [px, py] = inside([gLon, gLat / 2], 0.42);
+  svg.append("text").attr("x", lx).attr("y", ly + 14).attr("text-anchor", "middle").attr("font-size", 16).attr("font-weight", 600).attr("fill", col.blue).text("λ");
+  svg.append("text").attr("x", px + 10).attr("y", py).attr("font-size", 16).attr("font-weight", 600).attr("fill", col.red).text("φ");
+
+  // Earth's center and the point
+  svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", 3.5).attr("fill", col.ink);
+  const [ptx, pty] = projection([gLon, gLat]);
+  svg.append("circle").attr("cx", ptx).attr("cy", pty).attr("r", 6).attr("fill", col.red).attr("stroke", "#fff");
+  const [gx, gy] = projection([0, 0]);
+  svg.append("text").attr("x", gx - 4).attr("y", gy + 16).attr("text-anchor", "end").attr("font-size", 11).attr("fill", col.ink).text("0°, 0°");
+
+  const ns = gLat >= 0 ? "N" : "S", ew = gLon >= 0 ? "E" : "W";
+  return html`<div class="widget" style="display:${width > 720 ? "grid" : "block"};grid-template-columns:${g}px 1fr;gap:1.5rem;align-items:center">
+    <div>${svg.node()}</div>
+    <div style="font-size:1rem;line-height:1.6">
+      <div class="readout" style="margin-bottom:.5rem">${Math.abs(gLat)}° ${ns}, ${Math.abs(gLon)}° ${ew}</div>
+      <div><b style="color:${col.red}">Latitude φ</b>: angle between the equator's plane and the line to the point, measured at Earth's center</div>
+      <div style="margin-top:.5rem"><b style="color:${col.blue}">Longitude λ</b>: angle around the equator from Greenwich (dashed) to the point's meridian</div>
+    </div>
+  </div>`;
+}
 ```
 
 - Units: **degrees** (angles, not distances)
 - Longitude −180° to 180°; latitude −90° to 90°
-- Examples: **WGS 84 (EPSG:4326)**, NAD83 (EPSG:4269)
+- Examples: **WGS 84** (GPS), **NAD83** (US Census)
 
 ### Projected CRS: positions are distances on a flat grid
 
@@ -226,7 +265,8 @@ bad
 - Flattens one part of the globe onto a plane (a **projection**)
 - Units: **meters** (sometimes feet), measured from the grid's **origin**
 - Built on top of a geographic CRS
-- Examples: **EPSG:2169** (Luxembourg), **EPSG:5070** (NLCD), UTM zones
+- Examples: Luxembourg's national grid, the US-wide Albers grid used by NLCD,
+  UTM zones
 
 ### A degree is not a fixed distance
 
@@ -353,6 +393,9 @@ ext(elev_lux)
 - **Ellipsoid**: a smooth mathematical shape (size + flattening)
 - **Datum**: an ellipsoid + **where it's pinned** to the real Earth
 - Change the datum and the **same lat/lon** points to a **different spot**
+- **Local** datums (NAD27, Tokyo) fit one region; the pin is just where that
+  region's survey started
+- **Earth-centered** datums (NAD83, WGS 84) fit the whole planet
 
 ```{ojs}
 //| echo: false
@@ -360,8 +403,9 @@ datumSteps = [
   "1 · The real Earth",
   "2 · An ellipsoid",
   "3 · NAD27: pinned in Kansas",
-  "4 · Satellites",
-  "5 · WGS 84: Earth-centered"
+  "4 · Tokyo Datum: pinned in Japan",
+  "5 · Satellites",
+  "6 · WGS 84: Earth-centered"
 ]
 viewof datumStep = Inputs.radio(datumSteps, {value: datumSteps[0], label: "Step"})
 ```
@@ -385,10 +429,17 @@ datumGeom = {
   const nad27 = {rx: 100, ry: 82};
   nad27.x = pin[0] - nad27.rx * Math.cos(thPin);
   nad27.y = pin[1] + nad27.ry * Math.sin(thPin);
+  // Tokyo Datum (Bessel 1841): another local datum, pinned on the far side of
+  // the cross-section, with its own size and its own (different) center
+  const thTokyo = 40 * Math.PI / 180;
+  const pinTokyo = [earth.x + rEarth(thTokyo) * Math.cos(thTokyo), earth.y - 0.9 * rEarth(thTokyo) * Math.sin(thTokyo)];
+  const tokyo = {rx: 108, ry: 84};
+  tokyo.x = pinTokyo[0] - tokyo.rx * Math.cos(thTokyo);
+  tokyo.y = pinTokyo[1] + tokyo.ry * Math.sin(thTokyo);
   // WGS 84: centered on Earth's center of mass, a best fit everywhere
   const wgs84 = {rx: 121, ry: 104, x: earth.x, y: earth.y};
   const start = {rx: 112, ry: 94, x: 140, y: 195};  // ellipsoid parked on the left
-  return {W, H, earth, earthPath, pin, nad27, wgs84, start};
+  return {W, H, earth, earthPath, pin, pinTokyo, nad27, tokyo, wgs84, start};
 }
 
 datumSvg = {
@@ -419,11 +470,15 @@ datumSvg = {
     g.append("text").attr("x", earth.x + 10).attr("y", earth.y + 18).attr("font-size", 12).attr("fill", col.green).text("center of mass");
   });
 
-  // Ghost of the NAD27 ellipsoid, shown in the last step for comparison
-  const {nad27} = datumGeom;
+  // Dashed "ghosts" of the local datums, left behind for comparison
+  const {nad27, tokyo, pinTokyo} = datumGeom;
   svg.append("ellipse").attr("id", "ghost").attr("fill", "none").attr("stroke", col.red)
     .attr("stroke-dasharray", "5 4")
     .attr("cx", nad27.x).attr("cy", nad27.y).attr("rx", nad27.rx).attr("ry", nad27.ry)
+    .style("opacity", 0).style("transition", fade);
+  svg.append("ellipse").attr("id", "ghostTokyo").attr("fill", "none").attr("stroke", col.orange)
+    .attr("stroke-dasharray", "5 4").attr("stroke-width", 1.5)
+    .attr("cx", tokyo.x).attr("cy", tokyo.y).attr("rx", tokyo.rx).attr("ry", tokyo.ry)
     .style("opacity", 0).style("transition", fade);
 
   // The ellipsoid, with its semi-major (a) and semi-minor (b) axes.
@@ -449,6 +504,12 @@ datumSvg = {
   pinG.append("text").attr("x", pin[0] - 14).attr("y", pin[1] - 24).attr("text-anchor", "end").attr("font-size", 12).attr("fill", col.ink)
     .text("Meades Ranch, Kansas");
 
+  // Tokyo pin
+  const pinT = svg.append("g").attr("id", "pinTokyo").style("opacity", 0).style("transition", fade);
+  pinT.append("path").attr("d", `M${pinTokyo[0]},${pinTokyo[1]} l-7,-16 a8,8 0 1,1 14,0 z`).attr("fill", col.orange).attr("stroke", "#fff");
+  pinT.append("text").attr("x", pinTokyo[0] + 14).attr("y", pinTokyo[1] - 24).attr("font-size", 12).attr("fill", col.ink)
+    .text("Tokyo");
+
   // The figure plus a caption line (filled in by the step cell below)
   return html`<div class="widget" style="text-align:center">${svg.node()}
     <div class="datum-caption" style="font-size:1.05rem;font-weight:500;margin-top:.3rem"></div></div>`;
@@ -460,26 +521,29 @@ datumSvg = {
 // ---- Move things for the chosen step (re-runs when the step changes) ----
 {
   const s = datumSteps.indexOf(datumStep) + 1;
-  const {nad27, wgs84, start} = datumGeom;
+  const {nad27, tokyo, wgs84, start} = datumGeom;
   const svg = d3.select(datumSvg);
 
   // Where the ellipsoid sits and how big it is at each step. Setting these
   // styles triggers the CSS transitions defined when the figure was built.
-  const e = s <= 2 ? start : s <= 4 ? nad27 : wgs84;
+  const e = s <= 2 ? start : s === 3 ? nad27 : s <= 5 ? tokyo : wgs84;
   svg.select("#ell").style("opacity", s >= 2 ? 1 : 0)
     .style("transform", `translate(${e.x}px, ${e.y}px)`);
   svg.select("#shape").style("transform", `scale(${e.rx / start.rx}, ${e.ry / start.ry})`);
   svg.select("#axes").style("opacity", s === 2 ? 1 : 0);
   svg.select("#pin").style("opacity", s >= 3 ? 1 : 0);
-  svg.select("#sat").style("opacity", s >= 4 ? 1 : 0);
-  svg.select("#ghost").style("opacity", s === 5 ? 0.8 : 0);
+  svg.select("#pinTokyo").style("opacity", s >= 4 ? 1 : 0);
+  svg.select("#sat").style("opacity", s >= 5 ? 1 : 0);
+  svg.select("#ghost").style("opacity", s >= 4 ? 0.8 : 0);
+  svg.select("#ghostTokyo").style("opacity", s === 6 ? 0.9 : 0);
 
   const captions = [
     "The real Earth is lumpy (shape hugely exaggerated)",
     "An ellipsoid: a smooth shape we can do math on",
-    "NAD27 (Clarke 1866): fits North America, pinned at one survey point. Its center is NOT Earth's center",
+    "NAD27 (Clarke 1866): fits North America, pinned at Meades Ranch. Its center is NOT Earth's center",
+    "Tokyo Datum (Bessel 1841): fits Japan, pinned in Tokyo. Different ellipsoid, different center. Dashed red = NAD27",
     "Satellites orbit Earth's center of mass, so we can now locate that center",
-    "WGS 84: centered on Earth's center of mass. Dashed = NAD27. Same lat/lon, different place"
+    "WGS 84: centered on Earth's center of mass. Dashed = the old local datums. Same lat/lon, different places"
   ];
   svg.select(".datum-caption").text(captions[s - 1]);
   // Nothing to display from this cell (the figure lives in the cell above)
@@ -490,6 +554,7 @@ datumSvg = {
 | Datum | Ellipsoid | Pinned to | Where you'll meet it |
 |---|---|---|---|
 | NAD27 | Clarke 1866 | Survey point in Kansas (Meades Ranch) | Old maps and surveys |
+| Tokyo Datum | Bessel 1841 | Old observatory in Tokyo | Old Japanese maps (replaced in 2002) |
 | NAD83 | GRS 80 | Earth's center (moves with North America) | Census / TIGER, state agencies |
 | WGS 84 | WGS 84 | Earth's center (global) | GPS, web data, EPA TRI |
 
@@ -534,29 +599,49 @@ st_distance(au_nad83, au_nad27_converted)
 
 ---
 
-## 4 Projections: flattening is a trade
+## 4 Projections: flattening is a tradeoff
 
 ### Families: what you project onto
 
 ```{ojs}
 //| echo: false
 {
-  // Three schematic diagrams (sphere + surface, with projection rays),
-  // each above the real graticule that family produces.
+  // Three schematic diagrams: a see-through globe with a lightbulb at its
+  // center, shining onto a sheet of paper (cylinder, cone, or flat plane).
+  // Each sits above the real graticule that family produces.
   const pw = 220, ph = 340;
   const cx = 110, cy = 110, r = 55;
+  const light = "#ffd54a";
 
-  function base(svg) {
-    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", r).attr("fill", col.ocean).attr("stroke", col.ink).attr("stroke-width", 1.5);
-    svg.append("ellipse").attr("cx", cx).attr("cy", cy).attr("rx", r).attr("ry", 10).attr("fill", "none").attr("stroke", col.grid);
-    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", 2.5).attr("fill", col.ink);
+  // Beams of light: soft wedges from the bulb to the paper. Each `hit` is a
+  // pair of points on the paper; the lit strip between them is drawn bright.
+  function beams(svg, hits) {
+    for (const [a, b] of hits) {
+      svg.append("path").attr("d", `M${cx},${cy} L${a[0]},${a[1]} L${b[0]},${b[1]} Z`)
+        .attr("fill", light).attr("fill-opacity", 0.28);
+      svg.append("line").attr("x1", a[0]).attr("y1", a[1]).attr("x2", b[0]).attr("y2", b[1])
+        .attr("stroke", light).attr("stroke-width", 5).attr("stroke-linecap", "round");
+    }
   }
-  // A ray from the sphere's center, through the sphere, to the surface
-  function ray(svg, x2, y2) {
-    const a = Math.atan2(y2 - cy, x2 - cx);
-    svg.append("line").attr("x1", cx).attr("y1", cy).attr("x2", x2).attr("y2", y2).attr("stroke", col.orange).attr("stroke-width", 1.3);
-    svg.append("circle").attr("cx", cx + r * Math.cos(a)).attr("cy", cy + r * Math.sin(a)).attr("r", 3).attr("fill", col.orange);
-    svg.append("circle").attr("cx", x2).attr("cy", y2).attr("r", 3.5).attr("fill", col.red);
+  // The see-through globe, its glow, and the bulb
+  function base(svg, id) {
+    const grad = svg.append("defs").append("radialGradient").attr("id", id);
+    grad.append("stop").attr("offset", "0%").attr("stop-color", "#fff7d1").attr("stop-opacity", 1);
+    grad.append("stop").attr("offset", "100%").attr("stop-color", light).attr("stop-opacity", 0);
+    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", r).attr("fill", col.ocean).attr("fill-opacity", 0.55).attr("stroke", col.ink).attr("stroke-width", 1.5);
+    svg.append("ellipse").attr("cx", cx).attr("cy", cy).attr("rx", r).attr("ry", 10).attr("fill", "none").attr("stroke", col.grid);
+    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", 34).attr("fill", `url(#${id})`);
+    // Bulb: glass, then the screw base below it
+    svg.append("circle").attr("cx", cx).attr("cy", cy - 3).attr("r", 8).attr("fill", light).attr("stroke", "#b8860b").attr("stroke-width", 1.2);
+    svg.append("rect").attr("x", cx - 4).attr("y", cy + 4).attr("width", 8).attr("height", 7).attr("rx", 1.5).attr("fill", "#8a8f96");
+  }
+  // Where a ray from the bulb at angle `deg` (counterclockwise from east)
+  // meets a line through points p and q
+  function hit(deg, p, q) {
+    const a = -deg * Math.PI / 180, dx = Math.cos(a), dy = Math.sin(a);
+    const ux = q[0] - p[0], uy = q[1] - p[1];
+    const s = ((p[0] - cx) * uy - (p[1] - cy) * ux) / (dx * uy - dy * ux);
+    return [cx + s * dx, cy + s * dy];
   }
   // The graticule this family produces, drawn in the lower part of the panel
   function grat(svg, projection) {
@@ -580,11 +665,11 @@ st_distance(au_nad83, au_nad27_converted)
     svg.append("line").attr("x1", cx + r).attr("y1", 20).attr("x2", cx + r).attr("y2", 200).attr("stroke", col.blue).attr("stroke-width", 2);
     svg.append("ellipse").attr("cx", cx).attr("cy", 20).attr("rx", r).attr("ry", 9).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
     svg.append("ellipse").attr("cx", cx).attr("cy", 200).attr("rx", r).attr("ry", 9).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
-    base(svg);
+    // Light lands on the cylinder's walls
+    const right = [[cx + r, 0], [cx + r, 1]], left = [[cx - r, 0], [cx - r, 1]];
+    beams(svg, [[hit(25, ...right), hit(55, ...right)], [hit(200, ...left), hit(230, ...left)]]);
+    base(svg, "glowCyl");
     svg.append("ellipse").attr("cx", cx).attr("cy", cy).attr("rx", r).attr("ry", 10).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2);
-    ray(svg, cx + r, cy - r * Math.tan(30 * Math.PI / 180));
-    ray(svg, cx + r, cy - r * Math.tan(50 * Math.PI / 180));
-    ray(svg, cx - r, cy + r * Math.tan(35 * Math.PI / 180));
   }, d3.geoEquirectangular());
 
   const cone = panel("Conic", "touches along one parallel", svg => {
@@ -593,32 +678,24 @@ st_distance(au_nad83, au_nad27_converted)
     const tx = cx + r * Math.cos(phi), ty = cy - r * Math.sin(phi);
     const apexY = ty - (tx - cx) / Math.tan(phi);
     const baseY = 165, baseX = tx + (baseY - ty) * Math.tan(phi);
-    base(svg);
+    // Light lands on both sides of the cone
+    const rightSide = [[cx, apexY], [baseX, baseY]], leftSide = [[cx, apexY], [2 * cx - baseX, baseY]];
+    beams(svg, [[hit(-25, ...rightSide), hit(25, ...rightSide)], [hit(155, ...leftSide), hit(205, ...leftSide)]]);
+    base(svg, "glowCone");
     svg.append("path").attr("d", `M${2 * cx - baseX},${baseY} L${cx},${apexY} L${baseX},${baseY}`).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
     svg.append("ellipse").attr("cx", cx).attr("cy", baseY).attr("rx", baseX - cx).attr("ry", 11).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
     svg.append("ellipse").attr("cx", cx).attr("cy", ty).attr("rx", tx - cx).attr("ry", 7).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2);
-    // Rays hit the cone's side: intersect each ray with the cone line
-    for (const deg of [15, 55]) {
-      const a = -deg * Math.PI / 180;
-      const dx = Math.cos(a), dy = Math.sin(a);
-      // Cone side: from apex (cx, apexY) toward (baseX, baseY)
-      const ux = baseX - cx, uy = baseY - apexY;
-      const den = dx * uy - dy * ux;
-      const s = ((cx - cx) * uy - (apexY - cy) * ux) / den;
-      ray(svg, cx + s * dx, cy + s * dy);
-    }
   }, d3.geoConicEqualArea().parallels([30, 50]));
 
   const plane = panel("Azimuthal (planar)", "touches at one point", svg => {
-    base(svg);
     const py = cy - r;
+    // Light spreads upward onto the sheet of paper
+    const sheet = [[0, py], [1, py]];
+    beams(svg, [[hit(55, ...sheet), hit(125, ...sheet)]]);
+    base(svg, "glowPlane");
     svg.append("path").attr("d", `M${cx - 85},${py + 10} L${cx - 45},${py - 10} L${cx + 85},${py - 10} L${cx + 45},${py + 10} Z`)
       .attr("fill", col.blue).attr("fill-opacity", 0.08).attr("stroke", col.blue).attr("stroke-width", 2);
     svg.append("circle").attr("cx", cx).attr("cy", py).attr("r", 4).attr("fill", col.red);
-    for (const deg of [60, 115]) {
-      const a = deg * Math.PI / 180;
-      ray(svg, cx + (cy - py) / Math.tan(a), py);
-    }
   }, d3.geoAzimuthalEquidistant().rotate([0, -90]));
 
   return html`<div class="widget" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem">${cylinder}${cone}${plane}</div>`;
@@ -688,42 +765,36 @@ projections = new Map([
     make: () => d3.geoEquirectangular(), view: "world", family: "Cylindrical",
     keeps: "Neither (distance along meridians only)",
     gives: "Area and shape, badly near the poles",
-    epsg: "What you get when you plot EPSG:4326 data as x/y",
     use: "Quick looks. Not for measuring."
   }],
   ["Mercator", {
     make: () => d3.geoMercator(), view: "merc", family: "Cylindrical",
     keeps: "Conformal: shapes and angles",
     gives: "Area: grows rapidly toward the poles",
-    epsg: "3857 (Web Mercator, used by web maps), 3395",
     use: "Navigation, web basemaps. Never for area."
   }],
   ["Equal Earth", {
     make: () => d3.geoEqualEarth(), view: "world", family: "Pseudocylindrical",
     keeps: "Equal-area",
     gives: "Shape, especially near the edges",
-    epsg: "8857",
     use: "World maps of anything per area."
   }],
   ["Albers Equal Area Conic (US)", {
     make: () => d3.geoConicEqualArea().parallels([29.5, 45.5]).rotate([96, 0]),
     view: "na", family: "Conic", keeps: "Equal-area",
     gives: "Shape, slightly, away from the two standard parallels",
-    epsg: "5070 (NAD83 / Conus Albers, used by NLCD)",
     use: "Areas and densities across the US."
   }],
   ["Lambert Conformal Conic (Maryland)", {
     make: () => d3.geoConicConformal().parallels([38.3, 39.45]).rotate([77, 0]),
     view: "na", family: "Conic", keeps: "Conformal",
     gives: "Area, growing away from Maryland's latitudes",
-    epsg: "26985 (NAD83 / Maryland, m), 2248 (same, US feet)",
     use: "State Plane: Maryland agency data."
   }],
   ["Transverse Mercator (UTM zone 18N)", {
     make: () => d3.geoTransverseMercator().rotate([75, 0]),
     view: "na", family: "Cylindrical (turned sideways)", keeps: "Conformal",
     gives: "Scale grows east and west of 75° W",
-    epsg: "26918 (NAD83 / UTM 18N), 32618 (WGS 84 / UTM 18N)",
     use: "Distances and buffers in DC, MD, VA."
   }],
   ["Azimuthal Equidistant (centered on DC)", {
@@ -731,14 +802,12 @@ projections = new Map([
     view: "world", family: "Azimuthal",
     keeps: "Distance and direction from DC",
     gives: "Area and shape, worst far from DC",
-    epsg: "No standard code; defined around any center",
     use: "\"How far is everything from here?\""
   }],
   ["Orthographic (a view of the globe)", {
     make: () => d3.geoOrthographic().rotate([77.04, -38.9]), view: "world",
     family: "Azimuthal (perspective)", keeps: "Looks like the globe from space",
     gives: "Shows only half the Earth",
-    epsg: "Rarely used for analysis",
     use: "Reference: compare the others with this one."
   }]
 ])
@@ -789,7 +858,6 @@ viewof layers = Inputs.checkbox(["Tissot circles", "Routes: DC → London"], {
     <div><dt>Family</dt><dd>${p.family}</dd></div>
     <div><dt>Preserves</dt><dd>${p.keeps}</dd></div>
     <div><dt>Gives up</dt><dd>${p.gives}</dd></div>
-    <div><dt>EPSG codes</dt><dd>${p.epsg}</dd></div>
     <div><dt>Use it for</dt><dd>${p.use}</dd></div>
   </dl>`;
   return html`<div class="widget">${svg.node()}${legend}${card}</div>`;
@@ -968,7 +1036,7 @@ data.frame(country = two$name_long, area_globe, area_merc, area_ee)
 ## Discuss
 
 - Every number above was computed correctly. Which would you report?
-- What would an AI report if it "helpfully" transformed to 3857 first?
+- What would an AI report if it "helpfully" transformed to Web Mercator first?
 :::
 
 ---
@@ -1137,31 +1205,27 @@ st_bbox(cantons_relabeled)
 :::
 
 ::: {.callout-note collapse="true"}
-## 2. `extract(r, polygons, fun = mean)` gives you some `NaN`s. Name three possible causes, and how you'd tell them apart.
+## 2. `extract(r, polygons, fun = mean)` returns `NaN` for every polygon. What's the likely cause, and how would you check?
 
-- **All NaN**: the layers don't overlap. Usually a **CRS mismatch** (today's
-  failure); sometimes the raster covers a different area. Compare `st_bbox()`
-  and `ext()`
-- **Some NaN, with `na.rm = TRUE`**: those polygons fall only on **no-data
-  cells** or **outside the raster's edge**. Plot the polygons on the raster
-  and look at where the NaN ones are
-- **Many NaN, without `na.rm = TRUE`**: any polygon that touches even **one
-  no-data cell** returns NaN. Here, 9 of 12 cantons did. Add `na.rm = TRUE`,
-  and decide whether a partial average is acceptable
+- **CRS mismatch**: the polygons and the raster are in different CRSs, so
+  their coordinates don't overlap and no cells fall inside any polygon
+- Check: `st_crs(polygons) == st_crs(r)`, compare `st_bbox()` with `ext()`,
+  and plot the raster with the polygons on top
+- Fix: `st_transform()` the polygons to the raster's CRS
 :::
 
 ::: {.callout-note collapse="true"}
-## 3. An AI suggests `st_transform(tri, 2263)` before buffering TRI facilities in Baltimore by 1,000. Look up [EPSG:2263](https://epsg.io/2263). What's wrong?
+## 3. You need a 1 km buffer around each TRI facility in Baltimore. An AI writes `st_transform(tri, 2263)`, then `st_buffer(tri, 1000)`. Look up [EPSG:2263](https://epsg.io/2263). What's wrong?
 
 - It's **NAD83 / New York Long Island (ftUS)**: the wrong place, and the units
   are **US feet**
-- A buffer of 1,000 would be 1,000 ft (about 305 m), not 1 km
+- So `st_buffer(tri, 1000)` makes 1,000 ft buffers (about 305 m), not 1 km
 - Baltimore is outside its area of use, so distortion is larger too
 - Better: **26985** (Maryland, meters) or **26918 / 32618** (UTM 18N)
 :::
 
 ::: {.callout-note collapse="true"}
-## 4. TRI facilities are in EPSG:4326 and tracts in EPSG:4269, about a meter apart. What happens if you `st_join()` them without transforming? Loud or silent?
+## 4. TRI facilities are in EPSG:4326 and tracts in EPSG:4269, about a meter apart. What happens if you `st_join()` them without transforming?
 
 - **Loud**: `st_join()` stops with `st_crs(x) == st_crs(y) is not TRUE`
 - `sf` requires identical CRSs and can't judge whether a meter matters for your
