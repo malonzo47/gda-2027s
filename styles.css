@@ -49,3 +49,26 @@ div.cell-output pre {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+/* Autocorrelation lecture: notes, headings and readout tiles inside the
+   simulation widgets. */
+.ac-note {
+  font-size: 0.9rem;
+  color: #5f6b75;
+  margin: 0.4rem 0 0.2rem;
+}
+.ac-h {
+  font-size: 1rem;
+  margin: 1rem 0 0.2rem;
+}
+.ac-readouts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem 1.25rem;
+  margin-top: 0.4rem;
+}
+.ac-label {
+  font-size: 0.8rem;
+  color: #6c7a86;
+  line-height: 1.3;
+}
