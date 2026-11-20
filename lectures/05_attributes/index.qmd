@@ -1,0 +1,932 @@
+---
+title: "Attribute Data"
+subtitle: "Session 5 · Tables with geometry: subset and join"
+order: 5
+format:
+  html:
+    # All R code starts folded; outputs and figures stay visible
+    code-fold: true
+    code-summary: "Show code"
+knitr:
+  opts_chunk:
+    # Print all of a chunk's output after its code, so each chunk gets one
+    # "Show code" fold instead of one per line
+    results: hold
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Instructor setup, hidden from the page.
+# Wider printed output, so data frames don't wrap on the page
+options(width = 90)
+```
+
+```{ojs}
+//| echo: false
+// ---- Shared data and helpers for every widget on this page ----
+// The six counties come from R (see the hidden ojs_define() chunk in
+// section 1), so widget values always match the real nc data.
+
+// Colors used across widgets (same ink/red/blue/orange/green as Session 4)
+col = ({
+  ink: "#33414d", line: "#c9d1d8", head: "#eef1f4", fill: "#bcd3e6",
+  muted: "#9aa5ad", red: "#d1495b", blue: "#1f5f8b", orange: "#e08a1e",
+  green: "#5b8c5a", keyHead: "#fde9c8"
+})
+
+// ojs_define() may hand a single string over as a length-1 array
+nc6 = {
+  const raw = Array.isArray(nc6json) ? nc6json[0] : nc6json;
+  return JSON.parse(raw).features.map(f => ({...f.properties, shape: f}));
+}
+county = Object.fromEntries(nc6.map(d => [d.NAME, d]))
+
+// CSS transitions (not d3 transitions): they run without a JavaScript
+// animation loop and show up in headless screenshots (Session 4 norm 3.6)
+fade = "opacity 0.6s ease"
+glide = "transform 0.9s ease, opacity 0.6s ease"
+
+// Draw one county outline inside a cell. geoIdentity is planar, so the
+// ring direction of the polygon doesn't matter (spherical d3 projections
+// would fill the whole globe for a counter-clockwise ring).
+drawShape = (g, feature, x, y, w, h) => {
+  const proj = d3.geoIdentity().reflectY(true)
+    .fitExtent([[x + 5, y + 3], [x + w - 5, y + h - 3]], feature);
+  g.append("path").attr("d", d3.geoPath(proj)(feature))
+    .attr("fill", col.fill).attr("stroke", col.blue).attr("stroke-width", 0.8);
+}
+
+// Draw a table into an SVG parent.
+//   cols: [{key, label, w}]; rows: array of objects.
+//   A "geometry" column draws the county shape (or EMPTY if none);
+//   null/undefined values print as a red NA, like R does.
+// Each cell group gets the class col-<key>, so a whole column can be faded.
+// Rows are positioned with a CSS transform, so they can glide to new slots.
+drawTable = (parent, {x, y, cols, rows, rowH = 26, title = null, keyCol = null}) => {
+  const g = parent.append("g").attr("transform", `translate(${x},${y})`);
+  // Left edge of each column (plus the table's right edge at the end)
+  const xs = Array.from(d3.cumsum([0, ...cols.map(c => c.w)]));
+  if (title) {
+    g.append("text").attr("x", 0).attr("y", -8).attr("font-size", 13)
+      .attr("font-weight", 600).attr("fill", col.ink).text(title);
+  }
+  // Header row (the key column gets an orange header)
+  const head = g.append("g").attr("class", "head");
+  cols.forEach((c, j) => {
+    const cell = head.append("g").attr("class", `col-${c.key}`).style("transition", fade);
+    cell.append("rect").attr("x", xs[j]).attr("width", c.w).attr("height", rowH)
+      .attr("fill", c.key === keyCol ? col.keyHead : col.head).attr("stroke", col.line);
+    cell.append("text").attr("x", xs[j] + 6).attr("y", rowH / 2 + 4.5)
+      .attr("font-size", 12.5).attr("font-family", "monospace").attr("font-weight", 600)
+      .attr("fill", col.ink).text(c.label ?? c.key);
+  });
+  // Body rows
+  const rowGs = rows.map((r, i) => {
+    const rg = g.append("g").attr("class", "row")
+      .style("transform", `translate(0px, ${(i + 1) * rowH}px)`).style("transition", glide);
+    cols.forEach((c, j) => {
+      const cell = rg.append("g").attr("class", `col-${c.key}`).style("transition", fade);
+      cell.append("rect").attr("x", xs[j]).attr("width", c.w).attr("height", rowH)
+        .attr("fill", "#fff").attr("stroke", col.line);
+      const v = r[c.key];
+      const txt = cell.append("text").attr("x", xs[j] + 6).attr("y", rowH / 2 + 4.5)
+        .attr("font-size", 12.5).attr("font-family", "monospace");
+      if (c.key === "geometry") {
+        if (v) { txt.remove(); drawShape(cell, v, xs[j], 0, c.w, rowH); }
+        else txt.attr("fill", col.muted).attr("font-style", "italic").text("EMPTY");
+      } else if (v === null || v === undefined) {
+        txt.attr("fill", col.red).attr("font-weight", 700).text("NA");
+      } else {
+        txt.attr("fill", col.ink).text(v);
+      }
+    });
+    return rg;
+  });
+  return {g, rowGs, xs, rowH, width: xs[cols.length]};
+}
+
+// A curved connector between a left-table row and a right-table row
+// ("tentacle"). It starts undrawn: pathLength = 1 makes one dash cover the
+// whole curve, so moving stroke-dashoffset from 1 to 0 draws it on.
+connector = (parent, x1, y1, x2, y2, color) => parent.append("path")
+  .attr("class", "tentacle")
+  .attr("d", `M${x1},${y1} C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2} ${x2},${y2}`)
+  .attr("pathLength", 1)
+  .attr("fill", "none").attr("stroke", color).attr("stroke-width", 2)
+  .style("stroke-dasharray", "1").style("stroke-dashoffset", "1")
+  .style("transition", "stroke-dashoffset 0.9s ease")
+```
+
+## Today
+
+- Say how an **sf object** differs from a **data frame**, and why its
+  geometry is **sticky**
+- **Subset** rows and columns with base R and `dplyr`, and predict what
+  comes out
+- Define **joins**: **keys**, **inner** vs. **left**, and **cardinality**
+- Choose a **linking field** that will actually match
+
+---
+
+## 1 Data frames and sf objects
+
+- Data: **North Carolina counties** (`nc`), included with `sf`
+- 100 counties, births (`BIR74`, `BIR79`) and sudden infant deaths (`SID74`,
+  `SID79`)
+
+```{r}
+#| message: false
+library(sf)
+library(dplyr)
+
+nc <- st_read(system.file("shape/nc.shp", package = "sf"), quiet = TRUE)
+
+# The same data without the map, as a plain data frame
+nc_df <- st_drop_geometry(nc)
+
+class(nc)
+class(nc_df)
+```
+
+```{r}
+#| echo: false
+# Instructor-only: hand the first six counties (attributes + outlines) to
+# the OJS widgets as GeoJSON text, so the widgets show real nc values.
+nc6_js <- nc |>
+  slice(1:6) |>
+  select(NAME, FIPS, BIR74, SID74, BIR79, SID79)
+gj_file <- tempfile(fileext = ".geojson")
+st_write(nc6_js, gj_file, quiet = TRUE)
+ojs_define(nc6json = paste(readLines(gj_file), collapse = ""))
+```
+
+### An sf object is a data frame with a map attached
+
+- **sf object** = a data frame + one **geometry column** (the shapes)
+- Its class is **both**: `"sf"` and `"data.frame"`, so data frame tools
+  still work
+- **Sticky geometry**: the geometry column stays unless you **drop it on
+  purpose** (`st_drop_geometry()`)
+
+|  | Data frame | sf object |
+|---|---|---|
+| **Look** | Rows and columns | Same, plus a **header** (geometry type, bounding box, CRS) and a `geometry` column |
+| **Feel** | Every column is independent | Geometry **sticks** to its row through subsets and joins |
+| **Functionality** | `dplyr` verbs, `[ ]`, `$` | All of those, plus `st_*()` functions, maps with `plot()`, a CRS |
+| **Use case** | Tables with no location: a CDC PLACES CSV, a census table | Features on a map: tracts, counties, facilities |
+
+::: {.callout-tip icon="false"}
+## Predict
+- What will the sf version show that the data frame doesn't?
+:::
+
+```{ojs}
+//| echo: false
+viewof dfView = Inputs.radio(["data frame", "sf object"], {value: "data frame", label: "Show as"})
+```
+
+```{ojs}
+//| echo: false
+// ---- Data frame vs. sf: one table, built once; the cell below fades the
+// sf header and the geometry column in and out ----
+dfSvg = {
+  const W = 470, H = 250;
+  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "560px");
+  const cols = [
+    {key: "NAME", w: 110}, {key: "FIPS", w: 66}, {key: "BIR74", w: 66},
+    {key: "SID74", w: 60}, {key: "geometry", w: 80}
+  ];
+  const rows = nc6.map(d => ({...d, geometry: d.shape}));
+  // The sf header that print() shows above the table
+  const hdr = svg.append("g").attr("class", "sfhdr").style("transition", fade).attr("font-family", "monospace")
+    .attr("font-size", 12).attr("fill", col.blue);
+  hdr.append("text").attr("x", 10).attr("y", 16).text("Simple feature collection with 6 features and 4 fields");
+  hdr.append("text").attr("x", 10).attr("y", 32).text("Geometry type: MULTIPOLYGON");
+  hdr.append("text").attr("x", 10).attr("y", 48).text("Geodetic CRS:  NAD27");
+  drawTable(svg, {x: 10, y: 62, cols, rows});
+  return html`<div class="widget">${svg.node()}
+    <div class="op-box"><code class="df-code"></code><div class="op-out df-out"></div></div></div>`;
+}
+```
+
+```{ojs}
+//| echo: false
+// ---- React to the toggle ----
+{
+  const isSf = dfView === "sf object";
+  const svg = d3.select(dfSvg);
+  svg.select(".sfhdr").style("opacity", isSf ? 1 : 0);
+  svg.selectAll(".col-geometry").style("opacity", isSf ? 1 : 0);
+  svg.select(".df-code").text(isSf ? "nc6" : "st_drop_geometry(nc6)");
+  svg.select(".df-out").text(isSf
+    ? 'class: "sf" "data.frame" · 6 rows × 5 columns (4 fields + geometry)'
+    : 'class: "data.frame" · 6 rows × 4 columns');
+  return html`<span></span>`;
+}
+```
+
+```{r}
+nc |>
+  select(NAME, FIPS, BIR74) |>
+  head(3)
+
+nc_df |>
+  select(NAME, FIPS, BIR74) |>
+  head(3)
+```
+
+---
+
+## 2 Subsetting: base R and `dplyr`
+
+- **Rows** by condition: `filter()` or `x[condition, ]`
+- **Rows** by position: `slice()` or `x[1:3, ]`
+  - **Position is fragile**: row order can change; a condition says what you
+    mean
+- **Columns** by name: `select()` or `x[ , c("a", "b")]`
+- **One column out** as a plain vector: `x$a` or `pull(x, a)`
+  - **No geometry**: a vector isn't a table
+- On an sf object, base R and `dplyr` give the **same result**
+
+::: {.callout-tip icon="false"}
+## Predict
+- `nc6` has 6 counties and 4 attribute columns. Which column survives every
+  operation that returns a table?
+:::
+
+```{ojs}
+//| echo: false
+// The operations shown in the widget.
+//   crit:  the criterion in words, shown BEFORE the result
+//   hlCols / hlRows: what the criterion refers to (highlighted in orange)
+//   rows/cols: what the operation keeps; hdr: is the result still sf?
+subsetOps = {
+  const all = ["NAME", "FIPS", "BIR74", "SID74", "geometry"];
+  const allRows = () => true;
+  return [
+    {name: "Start: the whole table", base: "nc6", tidy: "nc6",
+     crit: "No criteria: the whole table", hlCols: [], hlRows: [],
+     rows: allRows, cols: all, hdr: true,
+     out: "sf · 6 rows × 5 columns (4 fields + geometry)"},
+    {name: "Rows by condition", base: "nc6[nc6$BIR74 > 1400, ]", tidy: "filter(nc6, BIR74 > 1400)",
+     crit: "Keep rows where BIR74 > 1400 · keep every column", hlCols: ["BIR74"], hlRows: [],
+     rows: d => d.BIR74 > 1400, cols: all, hdr: true,
+     out: "sf · 3 rows × 5 columns"},
+    {name: "Rows by position", base: "nc6[1:3, ]", tidy: "slice(nc6, 1:3)",
+     crit: "Keep rows 1 to 3 · keep every column", hlCols: [], hlRows: [0, 1, 2],
+     rows: (d, i) => i < 3, cols: all, hdr: true,
+     out: "sf · 3 rows × 5 columns"},
+    {name: "Columns by name", base: 'nc6[ , c("NAME", "BIR74")]', tidy: "select(nc6, NAME, BIR74)",
+     crit: "Keep every row · keep columns NAME and BIR74", hlCols: ["NAME", "BIR74"], hlRows: [],
+     rows: allRows, cols: ["NAME", "BIR74", "geometry"], hdr: true,
+     out: "sf · 6 rows × 3 columns: geometry came along without being asked"},
+    {name: "Rows and columns", base: 'nc6[nc6$SID74 == 0, "NAME"]', tidy: "nc6 |> filter(SID74 == 0) |> select(NAME)",
+     crit: "Keep rows where SID74 == 0 · keep column NAME", hlCols: ["SID74", "NAME"], hlRows: [],
+     rows: d => d.SID74 === 0, cols: ["NAME", "geometry"], hdr: true,
+     out: "sf · 1 row × 2 columns"},
+    {name: "One column as a vector", base: "nc6$NAME", tidy: "pull(nc6, NAME)",
+     crit: "Take column NAME out of the table", hlCols: ["NAME"], hlRows: [],
+     rows: allRows, cols: ["NAME"], hdr: false,
+     out: 'character vector, length 6: "Ashe" "Alleghany" "Surry" … (no table, no geometry)'},
+    {name: "Drop the geometry", base: "st_drop_geometry(nc6)", tidy: "st_drop_geometry(nc6)",
+     crit: "Remove the geometry column", hlCols: ["geometry"], hlRows: [],
+     rows: allRows, cols: ["NAME", "FIPS", "BIR74", "SID74"], hdr: false,
+     out: "data.frame · 6 rows × 4 columns: a plain table"}
+  ];
+}
+viewof subsetOp = Inputs.radio(subsetOps.map(d => d.name), {value: subsetOps[0].name, label: "Operation"})
+```
+
+```{ojs}
+//| echo: false
+// "Show result" button. Referencing subsetOp makes this cell re-run when
+// the operation changes, which creates a fresh button (count back to 0),
+// so every new operation starts at its criterion, not its result.
+// Built by hand rather than with Inputs.button(), which rendered as a blank
+// dark block under the site theme. The wrapper's value counts clicks.
+viewof subsetReveal = {
+  subsetOp;
+  const wrap = document.createElement("div");
+  const b = document.createElement("button");
+  b.className = "btn btn-outline-primary btn-sm";
+  b.textContent = "Show result →";
+  wrap.appendChild(b);
+  wrap.value = 0;
+  b.addEventListener("click", () => {
+    wrap.value += 1;
+    wrap.dispatchEvent(new Event("input", {bubbles: true}));
+  });
+  return wrap;
+}
+```
+
+```{ojs}
+//| echo: false
+// ---- Subsetting figure, built once ----
+subsetSvg = {
+  const W = 470, H = 250, T = {x: 34, y: 62}, rowH = 26;
+  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "560px");
+  const cols = [
+    {key: "NAME", w: 110}, {key: "FIPS", w: 66}, {key: "BIR74", w: 66},
+    {key: "SID74", w: 60}, {key: "geometry", w: 80}
+  ];
+  const rows = nc6.map(d => ({...d, geometry: d.shape}));
+  const hdr = svg.append("g").attr("class", "sfhdr").style("transition", fade).attr("font-family", "monospace")
+    .attr("font-size", 12).attr("fill", col.blue);
+  hdr.append("text").attr("class", "hdr1").attr("x", 10).attr("y", 16);
+  hdr.append("text").attr("x", 10).attr("y", 32).text("Geometry type: MULTIPOLYGON");
+  hdr.append("text").attr("x", 10).attr("y", 48).text("Geodetic CRS:  NAD27");
+  // Row numbers, as R prints them (used by "Rows by position")
+  rows.forEach((_, i) => svg.append("text").attr("class", "rownum")
+    .attr("x", T.x - 8).attr("y", T.y + (i + 1.5) * rowH + 4.5).attr("text-anchor", "end")
+    .attr("font-size", 12).attr("font-family", "monospace").attr("fill", col.muted)
+    .style("transition", "opacity 0.6s ease, fill 0.4s ease").text(i + 1));
+  drawTable(svg, {x: T.x, y: T.y, cols, rows});
+  // Header cells change color when the criterion refers to them
+  svg.selectAll(".head rect").style("transition", "fill 0.4s ease");
+  // "sticky" tag that appears above the geometry column when it survives a
+  // column subset nobody asked it to survive
+  svg.append("text").attr("class", "sticky").attr("x", T.x + 302 + 40).attr("y", 58)
+    .attr("text-anchor", "middle").attr("font-size", 12).attr("font-weight", 700)
+    .attr("fill", col.orange).style("transition", fade).style("opacity", 0).text("sticky ↓");
+  // Code, criteria and result go ABOVE the table, so the eye reads the
+  // operation first and then looks down at what it does
+  return html`<div class="widget">
+    <div class="op-box op-box-top">
+      <div><span class="op-tag">base R</span><code class="op-base"></code></div>
+      <div><span class="op-tag">dplyr</span><code class="op-tidy"></code></div>
+      <div><span class="op-tag">criteria</span><span class="op-crit"></span></div>
+      <div class="op-out"></div>
+    </div>${svg.node()}</div>`;
+}
+```
+
+```{ojs}
+//| echo: false
+// ---- React to the operation and the button ----
+// Before the click: show the criterion (code, words, orange highlights) on
+// the full table. After the click: fade what's dropped and give the result.
+{
+  const op = subsetOps.find(d => d.name === subsetOp);
+  const shown = subsetReveal > 0;
+  const svg = d3.select(subsetSvg);
+  const keepRow = nc6.map((d, i) => op.rows(d, i));
+  const nKeep = shown ? keepRow.filter(Boolean).length : 6;
+  const allCols = ["NAME", "FIPS", "BIR74", "SID74", "geometry"];
+  const keptCols = shown ? op.cols : allCols;
+
+  // Criterion highlights: column headers and row numbers it refers to
+  allCols.forEach(k => svg.selectAll(`.head .col-${k} rect`)
+    .style("fill", op.hlCols.includes(k) ? col.keyHead : col.head));
+  svg.selectAll(".rownum").each(function(_, i) {
+    d3.select(this).style("fill", op.hlRows.includes(i) ? col.orange : col.muted)
+      .style("font-weight", op.hlRows.includes(i) ? 700 : 400)
+      .style("opacity", !shown || keepRow[i] ? 1 : 0.12);
+  });
+
+  // Rows: dim the dropped ones (kept in place, so you can see what went)
+  svg.selectAll(".row").each(function(_, i) {
+    d3.select(this).style("opacity", !shown || keepRow[i] ? 1 : 0.12);
+  });
+  // Columns: dim the dropped ones, in the header and every row
+  allCols.forEach(k => svg.selectAll(`.col-${k}`).style("opacity", keptCols.includes(k) ? 1 : 0.12));
+
+  // The sf header only exists while the result is still an sf object
+  const nFields = keptCols.filter(k => k !== "geometry").length;
+  svg.select(".hdr1").text(`Simple feature collection with ${nKeep} feature${nKeep === 1 ? "" : "s"} and ${nFields} field${nFields === 1 ? "" : "s"}`);
+  svg.select(".sfhdr").style("opacity", !shown || op.hdr ? 1 : 0.12);
+  // Flag sticky geometry when columns were chosen and geometry wasn't one of them
+  svg.select(".sticky").style("opacity", shown && op.hdr && op.cols.length < 5 ? 1 : 0);
+
+  svg.select(".op-base").text(op.base);
+  svg.select(".op-tidy").text(op.tidy);
+  svg.select(".op-crit").text(op.crit);
+  svg.select(".op-out").text(shown ? "→ " + op.out : "What comes out? Predict, then click Show result");
+  return html`<span></span>`;
+}
+```
+
+- `nc6` is the first 6 counties with 4 columns:
+  `nc |> slice(1:6) |> select(NAME, FIPS, BIR74, SID74)`
+
+### Think-pair-share: what comes out?
+
+- **Input** for all four: `nc` is an **sf object**, **100 rows × 15
+  columns** (14 attributes + geometry)
+- For each one: **class**, **rows**, **columns**
+
+::: {.callout-tip icon="false"}
+## 1. Six counties had more than 10,000 births in 1974.
+```r
+nc[nc$BIR74 > 10000, ]
+```
+:::
+
+::: {.callout-note collapse="true"}
+## Answer 1
+- **sf, 6 rows × 15 columns**: a row subset keeps every column, geometry
+  included
+
+```{r}
+big <- nc[nc$BIR74 > 10000, ]
+class(big)
+dim(big)
+```
+:::
+
+::: {.callout-tip icon="false"}
+## 2. Two columns, by name.
+```r
+select(nc, NAME, BIR74)
+```
+:::
+
+::: {.callout-note collapse="true"}
+## Answer 2
+- **sf, 100 rows × 3 columns**, not 2: the geometry is **sticky**
+
+```{r}
+two_cols <- select(nc, NAME, BIR74)
+class(two_cols)
+dim(two_cols)
+names(two_cols)
+```
+:::
+
+::: {.callout-tip icon="false"}
+## 3. One column with `$`.
+```r
+nc$NAME
+```
+:::
+
+::: {.callout-note collapse="true"}
+## Answer 3
+- **A character vector of length 100**: not a table, so **no geometry**
+  and nothing to map
+
+```{r}
+names_only <- nc$NAME
+class(names_only)
+length(names_only)
+```
+:::
+
+::: {.callout-tip icon="false"}
+## 4. Nine counties had no SIDS deaths in 1979.
+```r
+nc |>
+  st_drop_geometry() |>
+  filter(SID79 == 0) |>
+  select(NAME)
+```
+:::
+
+::: {.callout-note collapse="true"}
+## Answer 4
+- **data.frame, 9 rows × 1 column**: the geometry was dropped first, so
+  `select()` keeps only what you named
+
+```{r}
+no_sids <- nc |>
+  st_drop_geometry() |>
+  filter(SID79 == 0) |>
+  select(NAME)
+class(no_sids)
+dim(no_sids)
+```
+:::
+
+---
+
+## 3 Joins: combining tables by a key
+
+### Keys
+
+- **Join**: add the columns of one table to another by **matching rows**
+- **Key** (linking field): the column whose values must match in both
+  tables, e.g. `FIPS`
+- Rows match by **value**, not by **position**: the two tables can be in
+  any order
+- **Left** table = the first argument; **right** table = the second
+
+### Inner vs. left
+
+- **`inner_join()`**: keep only rows whose key is in **both** tables
+- **`left_join()`**: keep **every row of the left** table; **NA** where
+  the right table had no match
+- `right_join()` and `full_join()` also keep unmatched rows **from the
+  right** table, which have **no polygon** (**EMPTY** geometry)
+- So with sf: **sf object on the left**, then **left** (keep every
+  feature) or **inner** (keep only matched features)
+
+::: {.callout-tip icon="false"}
+## Predict
+- Alleghany has no row in `births79`; Northampton has no polygon in
+  `counties`. Which join keeps each one?
+:::
+
+```{ojs}
+//| echo: false
+joinTypes = ["not joined", "inner_join", "left_join", "right_join", "full_join"]
+viewof joinType = Inputs.radio(joinTypes, {value: "not joined", label: "Join"})
+```
+
+```{ojs}
+//| echo: false
+// ---- Join types figure, built once. Left: 4 counties (sf). Right: births
+// for 4 counties, in a different order, one of them not in the left table.
+// Result: every row any join could produce; the cell below picks which
+// ones show and slides them into place. Starts "not joined": no lines,
+// no result. ----
+joinGeom = {
+  const leftNames = ["Ashe", "Alleghany", "Surry", "Currituck"];
+  const rightNames = ["Surry", "Northampton", "Ashe", "Currituck"];
+  // Result rows, in the order dplyr returns them: left rows first, then
+  // right-only rows at the end
+  const resultRows = [
+    ...leftNames.map(n => ({NAME: n, FIPS: county[n].FIPS,
+      BIR79: rightNames.includes(n) ? county[n].BIR79 : null, geometry: county[n].shape,
+      inLeft: true, inRight: rightNames.includes(n)})),
+    {NAME: null, FIPS: county.Northampton.FIPS, BIR79: county.Northampton.BIR79, geometry: null,
+     inLeft: false, inRight: true}
+  ];
+  return {leftNames, rightNames, resultRows};
+}
+
+joinSvg = {
+  const {leftNames, rightNames, resultRows} = joinGeom;
+  const W = 600, H = 410, rowH = 26;
+  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "700px");
+  const L = {x: 10, y: 34}, R = {x: 440, y: 34};
+  const left = drawTable(svg, {x: L.x, y: L.y, keyCol: "FIPS", title: "counties (sf)",
+    cols: [{key: "NAME", w: 100}, {key: "FIPS", w: 66}, {key: "geometry", w: 70}],
+    rows: leftNames.map(n => ({NAME: n, FIPS: county[n].FIPS, geometry: county[n].shape}))});
+  const right = drawTable(svg, {x: R.x, y: R.y, keyCol: "FIPS", title: "births79 (data frame)",
+    cols: [{key: "FIPS", w: 66}, {key: "BIR79", w: 66}],
+    rows: rightNames.map(n => ({FIPS: county[n].FIPS, BIR79: county[n].BIR79}))});
+  left.rowGs.forEach((g, i) => g.attr("data-name", leftNames[i]).attr("class", "row lrow"));
+  right.rowGs.forEach((g, i) => g.attr("data-name", rightNames[i]).attr("class", "row rrow"));
+  // Tentacles between matching keys (drawn on when a join is chosen), and
+  // "no match" labels for the rows with nothing to reach
+  const lx = L.x + left.width, rx = R.x;
+  leftNames.forEach((n, i) => {
+    const j = rightNames.indexOf(n);
+    const y1 = L.y + (i + 1.5) * rowH;
+    if (j >= 0) connector(svg, lx, y1, rx, R.y + (j + 1.5) * rowH, col.green);
+    else svg.append("text").attr("class", "nomatch").attr("x", lx + 8).attr("y", y1 + 4).attr("font-size", 12)
+      .attr("fill", col.orange).attr("font-weight", 600).style("opacity", 0).style("transition", fade).text("no match");
+  });
+  rightNames.forEach((n, j) => {
+    if (!leftNames.includes(n)) svg.append("text").attr("class", "nomatch").attr("x", rx - 8).attr("y", R.y + (j + 1.5) * rowH + 4)
+      .attr("text-anchor", "end").attr("font-size", 12).attr("fill", col.orange).attr("font-weight", 600)
+      .style("opacity", 0).style("transition", fade).text("no match");
+  });
+  // Result table: all five candidate rows; the update cell positions them.
+  // The whole result (title, header, rows) is hidden until a join is chosen.
+  const res = drawTable(svg, {x: L.x, y: 220, keyCol: "FIPS", title: "result",
+    cols: [{key: "NAME", w: 100}, {key: "FIPS", w: 66}, {key: "BIR79", w: 66}, {key: "geometry", w: 70}],
+    rows: resultRows});
+  res.g.attr("class", "result").style("opacity", 0).style("transition", fade);
+  res.rowGs.forEach(g => g.attr("class", "row resrow"));
+  return html`<div class="widget">${svg.node()}
+    <div class="op-box"><code class="join-code"></code><div class="op-out join-out"></div></div></div>`;
+}
+```
+
+```{ojs}
+//| echo: false
+// ---- React to the join type: draw the tentacles, then show which rows
+// survive and slide them into place ----
+{
+  const {resultRows} = joinGeom;
+  const rowH = 26;
+  const joined = joinType !== "not joined";
+  const svg = d3.select(joinSvg);
+  // When coming from "not joined", wait for the tentacles before showing
+  // the result; when switching between join types, update at once
+  const wasJoined = joinSvg.__joined ?? false;
+  joinSvg.__joined = joined;
+  const delay = joined && !wasJoined ? "0.9s" : "0s";
+
+  svg.selectAll(".tentacle").style("stroke-dashoffset", joined ? "0" : "1");
+  svg.selectAll(".nomatch").style("transition-delay", delay).style("opacity", joined ? 1 : 0);
+  svg.select(".result").style("transition-delay", delay).style("opacity", joined ? 1 : 0);
+
+  // Which result rows each join keeps
+  const keep = r => joinType === "inner_join" ? r.inLeft && r.inRight
+    : joinType === "left_join" ? r.inLeft
+    : joinType === "right_join" ? r.inRight
+    : joinType === "full_join";
+  // Slide kept rows into consecutive slots; hide the rest where they are
+  let slot = 0;
+  svg.selectAll(".resrow").each(function(_, i) {
+    const k = keep(resultRows[i]);
+    const g = d3.select(this).style("opacity", k ? 1 : 0);
+    if (k) g.style("transform", `translate(0px, ${++slot * rowH}px)`);
+  });
+  // Dim source rows that don't make it into the result
+  const leftKept = joinType === "inner_join" || joinType === "right_join" ? n => n !== "Alleghany" : () => true;
+  const rightKept = joinType === "inner_join" || joinType === "left_join" ? n => n !== "Northampton" : () => true;
+  svg.selectAll(".lrow").each(function() { d3.select(this).style("opacity", leftKept(this.dataset.name) ? 1 : 0.25); });
+  svg.selectAll(".rrow").each(function() { d3.select(this).style("opacity", rightKept(this.dataset.name) ? 1 : 0.25); });
+
+  const notes = {
+    "not joined": "Two separate tables. Pick a join",
+    inner_join: "only keys found in both tables · 3 rows",
+    left_join: "every row of counties; NA where births79 had no match · 4 rows",
+    right_join: "every row of births79; Northampton has no polygon (EMPTY) · 4 rows",
+    full_join: "every row of both tables; one EMPTY polygon · 5 rows"
+  };
+  svg.select(".join-code").text(joined ? `${joinType}(counties, births79, by = "FIPS")` : "counties   births79");
+  svg.select(".join-out").text("→ " + notes[joinType]);
+  return html`<span></span>`;
+}
+```
+
+- The **left** table decides what you start from; put the **sf object
+  first**
+- Table first, sf second: the result is a **plain data frame**, and the
+  geometry is just a column
+
+```{r}
+# 25 counties with more than 5,000 births in 1979; one row per county
+births79 <- nc_df |>
+  filter(BIR79 > 5000) |>
+  select(FIPS, BIR79)
+
+counties <- select(nc, NAME, FIPS)
+
+# sf first: still an sf object
+sf_first <- left_join(counties, births79, by = "FIPS")
+class(sf_first)
+
+# Table first: the geometry comes along, but the result isn't sf anymore
+table_first <- left_join(births79, counties, by = "FIPS")
+class(table_first)
+```
+
+### Cardinality: how many matches per key?
+
+- **Cardinality**: how many rows on each side share a key value
+- **One-to-one**: each key once on each side → rows out = rows in
+- **One-to-many**: a key repeats in the right table → **rows multiply**,
+  and each polygon **repeats**
+- `dplyr` **warns only for many-to-many**; one-to-many is **silent**
+
+<!-- separate list -->
+
+- Two right-hand tables for the same three counties:
+  - **`births`**: births in 1979, **one row per county**
+  - **`sids_long`**: SIDS deaths (sudden infant death syndrome) **per county
+    per year**: one row for 1974 and one for 1979, so **two rows per county**
+- "Long" format: one row per county **and year**, instead of one column per
+  year (`SID74`, `SID79` in `nc`)
+
+```{r}
+# Build sids_long: one block of rows per year, stacked
+sids74 <- nc_df |>
+  select(FIPS, SIDS = SID74) |>
+  mutate(year = 1974)
+sids79 <- nc_df |>
+  select(FIPS, SIDS = SID79) |>
+  mutate(year = 1979)
+sids_long <- bind_rows(sids74, sids79)
+
+# Two rows per county: Ashe (37009) appears once per year
+sids_long |>
+  filter(FIPS == "37009")
+nrow(sids_long)
+```
+
+::: {.callout-tip icon="false"}
+## Predict
+- Three counties; `sids_long` has **two rows per county**. How many rows
+  come out of `left_join()`?
+:::
+
+```{ojs}
+//| echo: false
+cardModes = ["not joined", "One-to-one: births", "One-to-many: sids_long"]
+viewof cardMode = Inputs.radio(cardModes, {value: cardModes[0], label: "Join to"})
+```
+
+```{ojs}
+//| echo: false
+// ---- Cardinality figure, built once. Both right tables are always shown;
+// a join sends tentacles to one of them, then shows its result. In
+// one-to-many mode the six result rows spread out from three slots, so each
+// county visibly doubles. ----
+cardSvg = {
+  const names = ["Ashe", "Alleghany", "Surry"];
+  // Layout: counties top left, births and sids_long stacked on the right,
+  // and the result under counties, level with sids_long. The right tables
+  // sit far enough right that the tentacles curve down past the result.
+  const W = 720, H = 390, rowH = 26;
+  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "780px");
+  const L = {x: 10, y: 34}, B = {x: 540, y: 34}, S = {x: 540, y: 190}, Ry = 190;
+  const left = drawTable(svg, {x: L.x, y: L.y, keyCol: "FIPS", title: "counties (sf)",
+    cols: [{key: "NAME", w: 100}, {key: "FIPS", w: 66}, {key: "geometry", w: 70}],
+    rows: names.map(n => ({NAME: n, FIPS: county[n].FIPS, geometry: county[n].shape}))});
+  const lx = L.x + left.width;
+
+  // births: one row per county
+  const births = drawTable(svg, {x: B.x, y: B.y, keyCol: "FIPS", title: "births",
+    cols: [{key: "FIPS", w: 66}, {key: "BIR79", w: 66}],
+    rows: names.map(n => ({FIPS: county[n].FIPS, BIR79: county[n].BIR79}))});
+  births.g.attr("class", "tbl-one").style("transition", fade);
+
+  // sids_long: two rows per county (1974, 1979)
+  const longRows = names.flatMap(n => [
+    {NAME: n, FIPS: county[n].FIPS, year: 1974, SIDS: county[n].SID74, geometry: county[n].shape},
+    {NAME: n, FIPS: county[n].FIPS, year: 1979, SIDS: county[n].SID79, geometry: county[n].shape}
+  ]);
+  const sids = drawTable(svg, {x: S.x, y: S.y, keyCol: "FIPS", title: "sids_long",
+    cols: [{key: "FIPS", w: 66}, {key: "year", w: 50}, {key: "SIDS", w: 50}], rows: longRows});
+  sids.g.attr("class", "tbl-many").style("transition", fade);
+
+  // Tentacles: one per match, drawn on by the update cell
+  const tOne = svg.append("g").attr("class", "t-one");
+  names.forEach((n, i) => connector(tOne, lx, L.y + (i + 1.5) * rowH, B.x, B.y + (i + 1.5) * rowH, col.green));
+  const tMany = svg.append("g").attr("class", "t-many");
+  longRows.forEach((r, j) => connector(tMany, lx, L.y + (Math.floor(j / 2) + 1.5) * rowH,
+    S.x, S.y + (j + 1.5) * rowH, col.orange));
+
+  // Results, hidden until a join is chosen. One-to-one: 3 rows.
+  // One-to-many: 6 rows; rows 2k and 2k+1 collapse onto slot k when hidden,
+  // then spread apart when shown.
+  const resOne = drawTable(svg, {x: L.x, y: Ry, keyCol: "FIPS", title: "left_join(counties, births, by = \"FIPS\")",
+    cols: [{key: "NAME", w: 90}, {key: "FIPS", w: 60}, {key: "BIR79", w: 60}, {key: "geometry", w: 64}],
+    rows: names.map(n => ({NAME: n, FIPS: county[n].FIPS, BIR79: county[n].BIR79, geometry: county[n].shape}))});
+  resOne.g.attr("class", "res-one").style("opacity", 0).style("transition", fade);
+  const resMany = drawTable(svg, {x: L.x, y: Ry, keyCol: "FIPS", title: "left_join(counties, sids_long, by = \"FIPS\")",
+    cols: [{key: "NAME", w: 90}, {key: "FIPS", w: 60}, {key: "year", w: 46}, {key: "SIDS", w: 46}, {key: "geometry", w: 64}],
+    rows: longRows});
+  resMany.g.attr("class", "res-many").style("opacity", 0).style("transition", fade);
+  resMany.rowGs.forEach(g => g.attr("class", "row manyrow"));
+  return html`<div class="widget">${svg.node()}<div class="op-box"><div class="op-out card-out"></div></div></div>`;
+}
+```
+
+```{ojs}
+//| echo: false
+// ---- React to the join choice: tentacles out, then the result ----
+{
+  const one = cardMode === cardModes[1], many = cardMode === cardModes[2];
+  const rowH = 26;
+  const svg = d3.select(cardSvg);
+  // The result waits for the tentacles to finish drawing
+  const delay = "0.9s";
+
+  // Tentacles: draw the chosen set, retract the other
+  svg.selectAll(".t-one .tentacle").style("stroke-dashoffset", one ? "0" : "1");
+  svg.selectAll(".t-many .tentacle").style("stroke-dashoffset", many ? "0" : "1");
+  // Both tables stay visible; the one not being joined dims
+  svg.select(".tbl-one").style("opacity", many ? 0.3 : 1);
+  svg.select(".tbl-many").style("opacity", one ? 0.3 : 1);
+  // Results: hide at once, show after the tentacles
+  svg.select(".res-one").style("transition-delay", one ? delay : "0s").style("opacity", one ? 1 : 0);
+  svg.select(".res-many").style("transition-delay", many ? delay : "0s").style("opacity", many ? 1 : 0);
+  svg.selectAll(".manyrow").each(function(_, i) {
+    const slot = many ? i + 1 : Math.floor(i / 2) + 1;
+    d3.select(this).style("transition-delay", many ? delay : "0s")
+      .style("transform", `translate(0px, ${slot * rowH}px)`);
+  });
+  svg.select(".card-out").text(
+    many ? "→ one-to-many: 3 counties in, 6 rows out. Each polygon now appears twice, and dplyr gives no warning"
+    : one ? "→ one-to-one: 3 rows in, 3 rows out"
+    : "→ Three counties, two possible tables. Pick one to join");
+  return html`<span></span>`;
+}
+```
+
+| Relationship | Example | Rows out | `dplyr` says |
+|---|---|---|---|
+| One-to-one | Counties + births, one row per county | Same as the left table | Nothing |
+| One-to-many | Counties + SIDS by county **and year** | More; polygons repeat | **Nothing** |
+| Many-to-one | Tracts + a county table, by county code | Same as the left table | Nothing (this one is normal) |
+| Many-to-many | Repeated keys on **both** sides | Multiplies | A **warning** |
+
+### Choosing your linking fields
+
+- **Unique** on the side that should have one row per key:
+  `anyDuplicated(births79$FIPS)` returns `0`
+- **Same meaning**: county code ↔ county code, not county code ↔ some other
+  ID
+- **Same type**: character vs. numeric is a **loud error** (below)
+- **Same format**: `"37009"` vs. `"1400000US37009"` is **no error**, just
+  **no matches**
+- **Codes over names**: names vary in spelling and punctuation ("St. Mary's"
+  vs. "Saint Marys"); codes are built to match
+- **Name the key**: always write `by = "FIPS"`; if the names differ,
+  `by = c("FIPS" = "fips")`
+
+```{r}
+#| error: true
+# FIPS is text ("37009"); FIPSNO is a number (37009)
+births_num <- nc_df |>
+  select(FIPSNO, BIR79)
+
+left_join(counties, births_num, by = c("FIPS" = "FIPSNO"))
+```
+
+### Think-pair-share: how many rows?
+
+- **Input** for all three:
+  - `counties`: **sf**, **100 rows**, one per county; columns `NAME`, `FIPS`
+  - `births79`: **data frame**, **25 rows**, one per county with more than
+    5,000 births; columns `FIPS`, `BIR79`
+  - `sids_long`: **data frame**, **200 rows**, **two per county** (1974,
+    1979); columns `FIPS`, `SIDS`, `year`
+
+::: {.callout-tip icon="false"}
+## 1. Left vs. inner.
+```r
+left_join(counties, births79, by = "FIPS")
+inner_join(counties, births79, by = "FIPS")
+```
+- Rows from each? How many `NA`s in `BIR79` after the left join?
+:::
+
+::: {.callout-note collapse="true"}
+## Answer 1
+- **left: 100 rows**, with **75 `NA`s**: every county stays
+- **inner: 25 rows**: only counties with a match
+
+```{r}
+with_left <- left_join(counties, births79, by = "FIPS")
+nrow(with_left)
+sum(is.na(with_left$BIR79))
+
+with_inner <- inner_join(counties, births79, by = "FIPS")
+nrow(with_inner)
+```
+:::
+
+::: {.callout-tip icon="false"}
+## 2. Two rows per county.
+```r
+left_join(counties, sids_long, by = "FIPS")
+```
+- How many rows? Any warning?
+:::
+
+::: {.callout-note collapse="true"}
+## Answer 2
+- **200 rows**, **no warning**: one-to-many, so every county polygon appears
+  **twice**
+- A map draws each county twice; a sum over counties counts each one twice
+
+```{r}
+# sids_long was built in the cardinality section above
+with_years <- left_join(counties, sids_long, by = "FIPS")
+nrow(with_years)
+```
+:::
+
+::: {.callout-tip icon="false"}
+## 3. Table first.
+```r
+left_join(births79, counties, by = "FIPS")
+```
+- How many rows? What class?
+:::
+
+::: {.callout-note collapse="true"}
+## Answer 3
+- **25 rows**, and a **plain data frame**: the left table was a data frame
+- The geometry is still there as a column, but it's **not an sf object**:
+  no header, no CRS, and `st_*()` functions won't treat it as a map
+
+```{r}
+flipped <- left_join(births79, counties, by = "FIPS")
+nrow(flipped)
+class(flipped)
+```
+:::
+
+---
+
+## 4 In your code
+
+| Question | Code | What to look for |
+|---|---|---|
+| Is this a map or a table? | `class(x)` | `"sf"` first means map |
+| How big is it? | `dim(x)`, `nrow(x)` | Compare **before and after** every subset and join |
+| Is the key unique? | `anyDuplicated(tbl$key)` | `0` |
+| Do the key types match? | `class(a$key)`, `class(b$key)` | The same class |
+| Did rows match? | `sum(is.na(x$new_column))` | How many rows got `NA` |
+| Did rows multiply? | `nrow()` before and after `left_join()` | Equal, unless you meant one-to-many |
+
+- A join that runs is **not** a join that worked
+- Most join problems **don't error**: they show up as **NAs** or **extra
+  rows**
+
+## Further reading
+
+- *Geocomputation with R*, [Chapter 3: Attribute data
+  operations](https://r.geocompx.org/attr), especially 3.2.1 (subsetting)
+  and 3.2.4 (joining)
+- `dplyr` reference: [Mutating joins](https://dplyr.tidyverse.org/reference/mutate-joins.html)

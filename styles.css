@@ -50,6 +50,32 @@ div.cell-output pre {
   font-variant-numeric: tabular-nums;
 }
 
+/* Code/result box under a table widget (Session 5): shows the base R and
+   dplyr code for the current step and what it returns. */
+.op-box {
+  font-size: 0.95rem;
+  margin-top: 0.4rem;
+  line-height: 1.7;
+}
+.op-tag {
+  display: inline-block;
+  min-width: 4.2rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #6c7a86;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.op-out {
+  font-weight: 600;
+  color: #1f5f8b;
+}
+
+/* When the code/result box sits above a table widget, space it from the figure. */
+.op-box-top {
+  margin: 0 0 0.6rem;
+}
+
 /* Autocorrelation lecture: notes, headings and readout tiles inside the
    simulation widgets. */
 .ac-note {
