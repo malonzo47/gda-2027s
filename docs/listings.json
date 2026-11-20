@@ -2,7 +2,9 @@
   {
     "listing": "/lectures.html",
     "items": [
-      "/lectures/04_crs/index.html"
+      "/lectures/04_crs/index.html",
+      "/lectures/05_attributes/index.html",
+      "/lectures/autocorrelation/index.html"
     ]
   }
 ]

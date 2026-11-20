@@ -204,7 +204,7 @@ contain the true summer mean?
 // 20 readings at random times over the whole summer.
 spacingOpts = new Map([
   ["1 hour", 1], ["6 hours", 6], ["12 hours", 12],
-  ["1 day", 24], ["2 days", 48], ["Random times, all summer", "random"]
+  ["1 day", 24], ["2 days", 48], ["3 days", 72], ["Random times, all summer", "random"]
 ])
 viewof tSpacing = Inputs.radio(spacingOpts, {value: 1, label: "Time between readings"})
 viewof tNew = counterButton("New summer")
@@ -545,7 +545,8 @@ $$n_\text{eff} \approx n \, \frac{1 - \rho}{1 + \rho}$$
 - The "worth about" tile in each widget estimates the same idea from the
   simulations
 - Evenly spaced readings over the whole summer can do **better than random**,
-  because they never bunch up
+  because they never bunch up (try "3 days" vs. "Random times" in the lake
+  widget)
 
 ---
 
