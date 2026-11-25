@@ -2,7 +2,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/prototypes/crs-slides/index.html</loc>
-    <lastmod>2026-11-25T16:45:42.071Z</lastmod>
+    <lastmod>2026-11-25T18:03:30.314Z</lastmod>
   </url>
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/lectures.html</loc>
@@ -27,5 +27,9 @@
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/prototypes/crs-scrolly/index.html</loc>
     <lastmod>2026-11-25T16:45:42.102Z</lastmod>
+  </url>
+  <url>
+    <loc>https://malonzo47.github.io/gda-2027s/prototypes/crs-deck/index.html</loc>
+    <lastmod>2026-11-25T18:03:30.229Z</lastmod>
   </url>
 </urlset>

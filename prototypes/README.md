@@ -6,7 +6,8 @@ list, and they're excluded from site search (`search: false`).
 
 | Folder | Format | For |
 |---|---|---|
-| `crs-slides/` | reveal.js slides | presenting in class |
+| `crs-deck/` | short reveal.js deck (~14 slides): core concepts and Predict moments only | presenting in class (the lecture page is the reading) |
+| `crs-slides/` | the whole lecture as reveal.js slides (58) | superseded by `crs-deck/` |
 | `crs-scrolly/` | scrollytelling page (closeread extension, in `../_extensions/`) | reading at home / on phones |
 | `shared/` | the datum figure (`datum_figure.js`) and lecture styles both use | |
 

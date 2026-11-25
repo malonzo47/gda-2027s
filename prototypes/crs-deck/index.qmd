@@ -1,0 +1,673 @@
+---
+title: "Coordinate Reference Systems"
+subtitle: "Session 4 · in class"
+# SHORT IN-CLASS DECK for the CRS lecture (~14 slides). The full lecture page
+# is the READING students do before class; this deck revisits only the core
+# concepts and the Predict -> widget -> discuss moments. Everything else (R
+# walk-throughs, the EPSG table, WKT, "Behind the scenes") stays in the reading.
+#
+# GENERATED FILE: edit _template.qmd, then run build_crs_versions.py (one
+# folder up). Lines like {{L:146-150}} are copied verbatim from the lecture.
+#
+# Presenting: arrow keys / space. S = speaker view, F = fullscreen.
+format:
+  revealjs:
+    theme: [simple, slides.scss]
+    css: ../shared/lecture.css
+    width: 1280
+    height: 760
+    margin: 0.06
+    slide-number: true
+    hash: true
+    transition: fade
+    transition-speed: fast
+    controls-layout: bottom-right
+    code-line-numbers: false
+    echo: true
+search: false
+# Unlisted: keep search engines from indexing it (it's still in sitemap.xml)
+include-in-header:
+  text: '<meta name="robots" content="noindex">'
+resources:
+  - countries-110m.json
+knitr:
+  opts_chunk:
+    comment: ""
+---
+
+## Today
+
+- Tell a **geographic** CRS from a **projected** one
+- What a **datum** is, and when it matters
+- Every flat map **distorts** something: choose what to protect
+- Choose and check a CRS in your own code
+
+::: {.reading-note}
+You've read the full lecture. Today we revisit the parts worth arguing about.
+:::
+
+```{r}
+#| label: setup
+#| include: false
+# Hidden setup: the same data as the reading, ready for the slides below.
+library(sf)
+library(terra)
+invisible(sf_proj_network(TRUE))   # let PROJ fetch datum-shift grids
+options(width = 90)
+elev     <- rast(system.file("ex/elev.tif", package = "terra"))
+cantons  <- st_read(system.file("ex/lux.shp", package = "terra"), quiet = TRUE)
+elev_lux <- project(elev, "EPSG:2169")   # the elevation in Luxembourg's national grid
+```
+
+```{ojs}
+//| echo: false
+// ---- Shared data and helpers for every widget on this page ----
+
+// World countries and land (Natural Earth via the world-atlas package)
+tc = require("topojson-client@3.1.0")
+worldTopo = FileAttachment("countries-110m.json").json()
+land = tc.feature(worldTopo, worldTopo.objects.land)
+countries = tc.feature(worldTopo, worldTopo.objects.countries).features
+
+// Colors used across widgets
+col = ({
+  ocean: "#eef3f7", land: "#cfc9bc", grid: "#c3ced8", ink: "#33414d",
+  red: "#d1495b", blue: "#1f5f8b", orange: "#e08a1e", green: "#5b8c5a"
+})
+
+// Boxes to fit maps to. Mercator can't show the poles (they're infinitely
+// far away), so its world view stops at 60° S and 84° N.
+naBox = d3.geoGraticule().extent([[-128, 18], [-62, 56]]).outline()
+mercBox = d3.geoGraticule().extent([[-180, -60], [180, 84]]).outline()
+fitTarget = view => view === "na" ? naBox : view === "merc" ? mercBox : {type: "Sphere"}
+```
+
+## Predict: draw them together {.predict-slide}
+
+The elevation arrived in Luxembourg's **national grid** (meters). The cantons
+are in **lon/lat** (degrees). Draw the cantons on top: what will we see?
+
+```{r}
+#| label: overlay-fail
+#| fig-width: 6
+#| fig-height: 4.6
+#| output-location: column-fragment
+plot(elev_lux)
+plot(st_geometry(cantons), add = TRUE, border = "red")
+```
+
+::: {.fragment}
+No cantons, no error. `crop()` **stops**; `extract()` returns **NaN**, silently.
+:::
+
+## Positions are angles
+
+```{ojs}
+//| echo: false
+viewof gLon = Inputs.range([-40, 85], {value: 40, step: 1, label: "Longitude (° E)"})
+viewof gLat = Inputs.range([-35, 80], {value: 45, step: 1, label: "Latitude (° N)"})
+```
+
+```{ojs}
+//| echo: false
+{
+  // A wireframe globe showing latitude and longitude as angles at Earth's center
+  const g = Math.min(width, 380);
+  const projection = d3.geoOrthographic().rotate([-25, -25]).fitExtent([[10, 10], [g - 10, g - 10]], {type: "Sphere"});
+  const path = d3.geoPath(projection);
+  const [cx, cy] = projection.translate();   // Earth's center, on screen
+
+  // Orthographic is a parallel projection, so a point a fraction k of the way
+  // from Earth's center to a surface point is drawn a fraction k of the way
+  // from the screen center to that point's projection
+  const inside = (lonlat, k) => {
+    const [x, y] = projection(lonlat);
+    return [cx + k * (x - cx), cy + k * (y - cy)];
+  };
+  const line = d3.line();
+  const along = (f, n = 40) => d3.range(0, 1.0001, 1 / n).map(f);
+
+  const svg = d3.create("svg").attr("viewBox", [0, 0, g, g]).style("width", g + "px").style("max-width", "100%");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean).attr("stroke", col.ink);
+  svg.append("path").attr("d", path(land)).attr("fill", col.land).attr("fill-opacity", 0.5);
+  svg.append("path").attr("d", path(d3.geoGraticule().step([15, 15])())).attr("fill", "none").attr("stroke", col.grid).attr("stroke-width", 0.7);
+
+  // Reference lines on the surface: the equator and Greenwich's meridian
+  const equator = {type: "LineString", coordinates: d3.range(-180, 181, 2).map(x => [x, 0])};
+  const greenwich = {type: "LineString", coordinates: d3.range(-90, 91, 2).map(y => [0, y])};
+  svg.append("path").attr("d", path(equator)).attr("fill", "none").attr("stroke", col.ink).attr("stroke-width", 1.5);
+  svg.append("path").attr("d", path(greenwich)).attr("fill", "none").attr("stroke", col.ink).attr("stroke-width", 1.5).attr("stroke-dasharray", "4 3");
+
+  // Surface arcs: longitude along the equator (blue), latitude up the meridian (red)
+  const lonArc = {type: "LineString", coordinates: along(t => [t * gLon, 0])};
+  const latArc = {type: "LineString", coordinates: along(t => [gLon, t * gLat])};
+  svg.append("path").attr("d", path(lonArc)).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 4);
+  svg.append("path").attr("d", path(latArc)).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 4);
+
+  // Radii from Earth's center to (0, 0), (lon, 0), and the point
+  for (const [p, c, dash] of [[[0, 0], col.ink, "4 3"], [[gLon, 0], col.blue, "4 3"], [[gLon, gLat], col.red, null]]) {
+    svg.append("path").attr("d", line([[cx, cy], projection(p)])).attr("stroke", c).attr("stroke-width", 1.8).attr("stroke-dasharray", dash);
+  }
+
+  // The angles themselves, drawn inside the globe near its center
+  svg.append("path").attr("d", line(along(t => inside([t * gLon, 0], 0.3)))).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2.5);
+  svg.append("path").attr("d", line(along(t => inside([gLon, t * gLat], 0.3)))).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2.5);
+  const [lx, ly] = inside([gLon / 2, 0], 0.42);
+  const [px, py] = inside([gLon, gLat / 2], 0.42);
+  svg.append("text").attr("x", lx).attr("y", ly + 14).attr("text-anchor", "middle").attr("font-size", 16).attr("font-weight", 600).attr("fill", col.blue).text("λ");
+  svg.append("text").attr("x", px + 10).attr("y", py).attr("font-size", 16).attr("font-weight", 600).attr("fill", col.red).text("φ");
+
+  // Earth's center and the point
+  svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", 3.5).attr("fill", col.ink);
+  const [ptx, pty] = projection([gLon, gLat]);
+  svg.append("circle").attr("cx", ptx).attr("cy", pty).attr("r", 6).attr("fill", col.red).attr("stroke", "#fff");
+  const [gx, gy] = projection([0, 0]);
+  svg.append("text").attr("x", gx - 4).attr("y", gy + 16).attr("text-anchor", "end").attr("font-size", 11).attr("fill", col.ink).text("0°, 0°");
+
+  const ns = gLat >= 0 ? "N" : "S", ew = gLon >= 0 ? "E" : "W";
+  return html`<div class="widget" style="display:${width > 720 ? "grid" : "block"};grid-template-columns:${g}px 1fr;gap:1.5rem;align-items:center">
+    <div>${svg.node()}</div>
+    <div style="font-size:1rem;line-height:1.6">
+      <div class="readout" style="margin-bottom:.5rem">${Math.abs(gLat)}° ${ns}, ${Math.abs(gLon)}° ${ew}</div>
+      <div><b style="color:${col.red}">Latitude φ</b>: angle between the equator's plane and the line to the point, measured at Earth's center</div>
+      <div style="margin-top:.5rem"><b style="color:${col.blue}">Longitude λ</b>: angle around the equator from Greenwich (dashed) to the point's meridian</div>
+    </div>
+  </div>`;
+}
+```
+
+## Predict: how long is a degree? {.predict-slide}
+
+1° of longitude at Luxembourg (49.6° N): more or less than 100 km?
+
+```{ojs}
+//| echo: false
+viewof lat = Inputs.range([0, 89], {
+  value: 0.4, step: 0.1, label: "Latitude (° N)"
+})
+```
+
+```{ojs}
+//| echo: false
+// Length of one degree on a sphere of radius 6,371 km.
+// Latitude: constant. Longitude: shrinks with cos(latitude).
+kmPerDegLat = 111.2
+kmPerDegLon = 111.2 * Math.cos(lat * Math.PI / 180)
+
+// Reference places in Africa and Europe, so they all fit on one globe
+places = [
+  {name: "Libreville (equator)", lon: 9.45, lat: 0.4},
+  {name: "Cairo", lon: 31.24, lat: 30.0},
+  {name: "Luxembourg", lon: 6.13, lat: 49.6},
+  {name: "Oslo", lon: 10.75, lat: 59.9},
+  {name: "Svalbard", lon: 15.63, lat: 78.2}
+]
+
+{
+  const wide = width > 720;
+  // On phones, leave room for the .widget box's padding and border (~40 px)
+  const g = wide ? 300 : Math.min(width - 40, 340);
+
+  // ---- Wireframe globe: graticule, the chosen parallel, and the places ----
+  const projection = d3.geoOrthographic().rotate([-15, -35]).fitExtent([[6, 6], [g - 6, g - 6]], {type: "Sphere"});
+  const path = d3.geoPath(projection);
+  const svg = d3.create("svg").attr("viewBox", [0, 0, g, g]).style("width", g + "px");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean).attr("stroke", col.ink);
+  svg.append("path").attr("d", path(land)).attr("fill", col.land).attr("fill-opacity", 0.6);
+  svg.append("path").attr("d", path(d3.geoGraticule().step([15, 15])()))
+    .attr("fill", "none").attr("stroke", col.grid).attr("stroke-width", 0.7);
+  // The full parallel at the slider's latitude: a smaller circle near the pole
+  const parallel = {type: "LineString", coordinates: d3.range(-180, 181, 2).map(x => [x, lat])};
+  svg.append("path").attr("d", path(parallel)).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2.5);
+  // A 10-degree stretch of longitude (red) and of latitude (gray), to compare
+  const seg = (a, b) => ({type: "LineString", coordinates: d3.range(0, 1.001, 0.05).map(t => [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])])});
+  svg.append("path").attr("d", path(seg([10, Math.min(lat, 79)], [20, Math.min(lat, 79)])))
+    .attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 7).attr("stroke-linecap", "round");
+  svg.append("path").attr("d", path(seg([-10, Math.min(lat, 79)], [-10, Math.min(lat, 79) + 10])))
+    .attr("fill", "none").attr("stroke", "#7a8ca3").attr("stroke-width", 7).attr("stroke-linecap", "round");
+  for (const p of places) {
+    const [x, y] = projection([p.lon, p.lat]);
+    svg.append("circle").attr("cx", x).attr("cy", y).attr("r", 4).attr("fill", col.ink);
+  }
+
+  // ---- Bars: 1 degree of latitude vs. 1 degree of longitude ----
+  const bw = wide ? Math.max(200, width - g - 60) : width - 40;
+  const bar = (label, km, color) => html`
+    <div style="margin:.35rem 0">
+      <div style="font-size:.95rem">${label}: <b>${km.toFixed(1)} km</b></div>
+      <div style="height:18px;width:${(km / kmPerDegLat) * bw}px;background:${color};border-radius:3px"></div>
+    </div>`;
+
+  // Buttons that move the slider. Built with DOM calls because Quarto's
+  // html`` template doesn't attach functions as event handlers.
+  const buttons = places.map(p => {
+    const b = document.createElement("button");
+    b.textContent = p.name;
+    b.className = "btn btn-sm btn-outline-secondary";
+    b.style.margin = ".2rem .3rem .2rem 0";
+    b.addEventListener("click", () => {
+      const input = viewof lat;
+      input.value = p.lat;
+      input.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    return b;
+  });
+
+  return html`<div class="widget" style="display:${wide ? "grid" : "block"};grid-template-columns:${g}px 1fr;gap:1.5rem;align-items:center">
+    <div>${svg.node()}</div>
+    <div>
+      ${bar("1° of latitude (gray)", kmPerDegLat, "#7a8ca3")}
+      ${bar("1° of longitude (red)", kmPerDegLon, col.red)}
+      <div style="margin-top:.6rem;font-size:.9rem">Jump to: ${buttons}</div>
+      <div style="margin-top:.6rem;font-size:.85rem;color:#5f6b75">Thick segments on the globe span 10°. The red line is the full parallel at this latitude.</div>
+    </div>
+  </div>`;
+}
+```
+
+## From a lumpy Earth to WGS 84 {.figure-slide}
+
+<!-- The datum figure is inserted by the script at the end of the file. Each
+     arrow-key press reveals one empty fragment; the figure's step follows. -->
+<div id="datum-fig"></div>
+
+::: {.fragment .step}
+:::
+::: {.fragment .step}
+:::
+::: {.fragment .step}
+:::
+::: {.fragment .step}
+:::
+::: {.fragment .step}
+:::
+
+## Predict: same numbers, two datums {.predict-slide}
+
+The AU campus at **−77.0887, 38.9365**, labeled **NAD27** instead of **NAD83**.
+How far apart on the ground?
+
+::: {.choices .four}
+[A · 0 m]{.choice} [B · about 3 m]{.choice} [C · about 30 m]{.choice} [D · about 300 m]{.choice}
+:::
+
+```{r}
+#| label: datum-shift
+#| output-location: fragment
+au_nad27 <- st_sfc(st_point(c(-77.0887, 38.9365)), crs = 4267)
+au_nad83 <- st_sfc(st_point(c(-77.0887, 38.9365)), crs = 4269)
+st_distance(au_nad83, st_transform(au_nad27, 4269))
+```
+
+## Families: what you project onto
+
+```{ojs}
+//| echo: false
+{
+  // Three schematic diagrams: a see-through globe with a lightbulb at its
+  // center, shining onto a sheet of paper (cylinder, cone, or flat plane).
+  // Each sits above the real graticule that family produces.
+  const pw = 220, ph = 340;
+  const cx = 110, cy = 110, r = 55;
+  const light = "#ffd54a";
+
+  // Beams of light: soft wedges from the bulb to the paper. Each `hit` is a
+  // pair of points on the paper; the lit strip between them is drawn bright.
+  function beams(svg, hits) {
+    for (const [a, b] of hits) {
+      svg.append("path").attr("d", `M${cx},${cy} L${a[0]},${a[1]} L${b[0]},${b[1]} Z`)
+        .attr("fill", light).attr("fill-opacity", 0.28);
+      svg.append("line").attr("x1", a[0]).attr("y1", a[1]).attr("x2", b[0]).attr("y2", b[1])
+        .attr("stroke", light).attr("stroke-width", 5).attr("stroke-linecap", "round");
+    }
+  }
+  // The see-through globe, its glow, and the bulb
+  function base(svg, id) {
+    const grad = svg.append("defs").append("radialGradient").attr("id", id);
+    grad.append("stop").attr("offset", "0%").attr("stop-color", "#fff7d1").attr("stop-opacity", 1);
+    grad.append("stop").attr("offset", "100%").attr("stop-color", light).attr("stop-opacity", 0);
+    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", r).attr("fill", col.ocean).attr("fill-opacity", 0.55).attr("stroke", col.ink).attr("stroke-width", 1.5);
+    svg.append("ellipse").attr("cx", cx).attr("cy", cy).attr("rx", r).attr("ry", 10).attr("fill", "none").attr("stroke", col.grid);
+    svg.append("circle").attr("cx", cx).attr("cy", cy).attr("r", 34).attr("fill", `url(#${id})`);
+    // Bulb: glass, then the screw base below it
+    svg.append("circle").attr("cx", cx).attr("cy", cy - 3).attr("r", 8).attr("fill", light).attr("stroke", "#b8860b").attr("stroke-width", 1.2);
+    svg.append("rect").attr("x", cx - 4).attr("y", cy + 4).attr("width", 8).attr("height", 7).attr("rx", 1.5).attr("fill", "#8a8f96");
+  }
+  // Where a ray from the bulb at angle `deg` (counterclockwise from east)
+  // meets a line through points p and q
+  function hit(deg, p, q) {
+    const a = -deg * Math.PI / 180, dx = Math.cos(a), dy = Math.sin(a);
+    const ux = q[0] - p[0], uy = q[1] - p[1];
+    const s = ((p[0] - cx) * uy - (p[1] - cy) * ux) / (dx * uy - dy * ux);
+    return [cx + s * dx, cy + s * dy];
+  }
+  // The graticule this family produces, drawn in the lower part of the panel
+  function grat(svg, projection) {
+    const box = [[20, 215], [pw - 20, ph - 30]];
+    projection.fitExtent(box, {type: "Sphere"});
+    const path = d3.geoPath(projection);
+    svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean).attr("stroke", col.ink);
+    svg.append("path").attr("d", path(land)).attr("fill", col.land);
+    svg.append("path").attr("d", path(d3.geoGraticule().step([30, 30])())).attr("fill", "none").attr("stroke", col.grid);
+  }
+  function panel(title, note, draw, projection) {
+    const svg = d3.create("svg").attr("viewBox", [0, 0, pw, ph]).style("width", "100%").style("max-width", "260px");
+    draw(svg);
+    grat(svg, projection);
+    svg.append("text").attr("x", pw / 2).attr("y", ph - 8).attr("text-anchor", "middle").attr("font-size", 12).attr("fill", col.ink).text(note);
+    return html`<div style="text-align:center"><div style="font-weight:600">${title}</div>${svg.node()}</div>`;
+  }
+
+  const cylinder = panel("Cylindrical", "touches along the equator", svg => {
+    svg.append("line").attr("x1", cx - r).attr("y1", 20).attr("x2", cx - r).attr("y2", 200).attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("line").attr("x1", cx + r).attr("y1", 20).attr("x2", cx + r).attr("y2", 200).attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", 20).attr("rx", r).attr("ry", 9).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", 200).attr("rx", r).attr("ry", 9).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    // Light lands on the cylinder's walls
+    const right = [[cx + r, 0], [cx + r, 1]], left = [[cx - r, 0], [cx - r, 1]];
+    beams(svg, [[hit(25, ...right), hit(55, ...right)], [hit(200, ...left), hit(230, ...left)]]);
+    base(svg, "glowCyl");
+    svg.append("ellipse").attr("cx", cx).attr("cy", cy).attr("rx", r).attr("ry", 10).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2);
+  }, d3.geoEquirectangular());
+
+  const cone = panel("Conic", "touches along one parallel", svg => {
+    // Cone tangent to the sphere at 35° N; apex on the axis above the pole
+    const phi = 35 * Math.PI / 180;
+    const tx = cx + r * Math.cos(phi), ty = cy - r * Math.sin(phi);
+    const apexY = ty - (tx - cx) / Math.tan(phi);
+    const baseY = 165, baseX = tx + (baseY - ty) * Math.tan(phi);
+    // Light lands on both sides of the cone
+    const rightSide = [[cx, apexY], [baseX, baseY]], leftSide = [[cx, apexY], [2 * cx - baseX, baseY]];
+    beams(svg, [[hit(-25, ...rightSide), hit(25, ...rightSide)], [hit(155, ...leftSide), hit(205, ...leftSide)]]);
+    base(svg, "glowCone");
+    svg.append("path").attr("d", `M${2 * cx - baseX},${baseY} L${cx},${apexY} L${baseX},${baseY}`).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", baseY).attr("rx", baseX - cx).attr("ry", 11).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("ellipse").attr("cx", cx).attr("cy", ty).attr("rx", tx - cx).attr("ry", 7).attr("fill", "none").attr("stroke", col.red).attr("stroke-width", 2);
+  }, d3.geoConicEqualArea().parallels([30, 50]));
+
+  const plane = panel("Azimuthal (planar)", "touches at one point", svg => {
+    const py = cy - r;
+    // Light spreads upward onto the sheet of paper
+    const sheet = [[0, py], [1, py]];
+    beams(svg, [[hit(55, ...sheet), hit(125, ...sheet)]]);
+    base(svg, "glowPlane");
+    svg.append("path").attr("d", `M${cx - 85},${py + 10} L${cx - 45},${py - 10} L${cx + 85},${py - 10} L${cx + 45},${py + 10} Z`)
+      .attr("fill", col.blue).attr("fill-opacity", 0.08).attr("stroke", col.blue).attr("stroke-width", 2);
+    svg.append("circle").attr("cx", cx).attr("cy", py).attr("r", 4).attr("fill", col.red);
+  }, d3.geoAzimuthalEquidistant().rotate([0, -90]));
+
+  return html`<div class="widget" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem">${cylinder}${cone}${plane}</div>`;
+}
+```
+
+## Predict: Mercator's polar circles? {.predict-slide}
+
+```{ojs}
+//| echo: false
+// Tissot circles: identical 4-degree circles on a 30 x 15 degree grid
+tissot = {
+  const circles = [];
+  for (let lon = -180; lon < 180; lon += 30) {
+    for (let lat = -75; lat <= 75; lat += 15) {
+      circles.push(d3.geoCircle().center([lon, lat]).radius(4)());
+    }
+  }
+  return {type: "GeometryCollection", geometries: circles};
+}
+
+// Two routes from DC to London. Great circle = shortest path on the globe.
+// Rhumb line = constant compass bearing: a straight line on Mercator, so we
+// build it by drawing a straight line in Mercator space and un-projecting it.
+dc = [-77.04, 38.90]
+london = [-0.13, 51.51]
+greatCircle = ({type: "LineString", coordinates: [dc, london]})
+rhumbLine = {
+  const m = d3.geoMercator();
+  const [x0, y0] = m(dc), [x1, y1] = m(london);
+  const coords = d3.range(0, 1.0001, 0.01).map(t => m.invert([x0 + t * (x1 - x0), y0 + t * (y1 - y0)]));
+  return {type: "LineString", coordinates: coords};
+}
+
+// ---- The projections on offer, with the facts shown in the info card ----
+projections = new Map([
+  ["Equirectangular (plain lon/lat)", {
+    make: () => d3.geoEquirectangular(), view: "world", family: "Cylindrical",
+    keeps: "Neither (distance along meridians only)",
+    gives: "Area and shape, badly near the poles",
+    use: "Quick looks. Not for measuring."
+  }],
+  ["Mercator", {
+    make: () => d3.geoMercator(), view: "merc", family: "Cylindrical",
+    keeps: "Conformal: shapes and angles",
+    gives: "Area: grows rapidly toward the poles",
+    use: "Navigation, web basemaps. Never for area."
+  }],
+  ["Equal Earth", {
+    make: () => d3.geoEqualEarth(), view: "world", family: "Pseudocylindrical",
+    keeps: "Equal-area",
+    gives: "Shape, especially near the edges",
+    use: "World maps of anything per area."
+  }],
+  ["Albers Equal Area Conic (US)", {
+    make: () => d3.geoConicEqualArea().parallels([29.5, 45.5]).rotate([96, 0]),
+    view: "na", family: "Conic", keeps: "Equal-area",
+    gives: "Shape, slightly, away from the two standard parallels",
+    use: "Areas and densities across the US."
+  }],
+  ["Lambert Conformal Conic (Maryland)", {
+    make: () => d3.geoConicConformal().parallels([38.3, 39.45]).rotate([77, 0]),
+    view: "na", family: "Conic", keeps: "Conformal",
+    gives: "Area, growing away from Maryland's latitudes",
+    use: "State Plane: Maryland agency data."
+  }],
+  ["Transverse Mercator (UTM zone 18N)", {
+    make: () => d3.geoTransverseMercator().rotate([75, 0]),
+    view: "na", family: "Cylindrical (turned sideways)", keeps: "Conformal",
+    gives: "Scale grows east and west of 75° W",
+    use: "Distances and buffers in DC, MD, VA."
+  }],
+  ["Azimuthal Equidistant (centered on DC)", {
+    make: () => d3.geoAzimuthalEquidistant().rotate([77.04, -38.9]),
+    view: "world", family: "Azimuthal",
+    keeps: "Distance and direction from DC",
+    gives: "Area and shape, worst far from DC",
+    use: "\"How far is everything from here?\""
+  }],
+  ["Orthographic (a view of the globe)", {
+    make: () => d3.geoOrthographic().rotate([77.04, -38.9]), view: "world",
+    family: "Azimuthal (perspective)", keeps: "Looks like the globe from space",
+    gives: "Shows only half the Earth",
+    use: "Reference: compare the others with this one."
+  }]
+])
+```
+
+```{ojs}
+//| echo: false
+viewof projName = Inputs.select([...projections.keys()], {
+  label: "Projection", value: "Orthographic (a view of the globe)"
+})
+viewof layers = Inputs.checkbox(["Tissot circles", "Routes: DC → London"], {
+  value: ["Tissot circles"]
+})
+```
+
+```{ojs}
+//| echo: false
+{
+  const p = projections.get(projName);
+  const w = Math.min(width, 860);   // slides: cap size so it fits
+  const h = Math.round(w * 0.5);
+  // Fit to the world, Mercator's box, or North America. clipExtent keeps
+  // conic and transverse maps from drawing far off-screen.
+  const projection = p.make()
+    .fitExtent([[8, 8], [w - 8, h - 8]], fitTarget(p.view))
+    .clipExtent([[0, 0], [w, h]]);
+  const path = d3.geoPath(projection);
+
+  const svg = d3.create("svg").attr("viewBox", [0, 0, w, h]).style("width", "100%").style("max-width", w + "px");
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean);
+  svg.append("path").attr("d", path(d3.geoGraticule10())).attr("fill", "none").attr("stroke", col.grid).attr("stroke-width", 0.5);
+  svg.append("path").attr("d", path(land)).attr("fill", col.land);
+  if (layers.includes("Tissot circles")) {
+    svg.append("path").attr("d", path(tissot)).attr("fill", col.red).attr("fill-opacity", 0.55);
+  }
+  if (layers.includes("Routes: DC → London")) {
+    svg.append("path").attr("d", path(greatCircle)).attr("fill", "none").attr("stroke", col.blue).attr("stroke-width", 2.5);
+    svg.append("path").attr("d", path(rhumbLine)).attr("fill", "none").attr("stroke", col.orange).attr("stroke-width", 2.5).attr("stroke-dasharray", "6 4");
+  }
+  svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", "none").attr("stroke", "#9aa5ad");
+
+  const legend = layers.includes("Routes: DC → London")
+    ? html`<div style="font-size:.9rem;margin-top:.3rem"><span style="color:${col.blue}">━━</span> great circle (shortest) &nbsp; <span style="color:${col.orange}">╍╍</span> rhumb line (constant compass bearing)</div>`
+    : "";
+
+  // Each fact is its own <div> so the card can flow into columns
+  const card = html`<dl class="proj-card">
+    <div><dt>Family</dt><dd>${p.family}</dd></div>
+    <div><dt>Preserves</dt><dd>${p.keeps}</dd></div>
+    <div><dt>Gives up</dt><dd>${p.gives}</dd></div>
+    <div><dt>Use it for</dt><dd>${p.use}</dd></div>
+  </dl>`;
+  return html`<div class="widget">${svg.node()}${legend}${card}</div>`;
+}
+```
+
+## How big is Greenland, really?
+
+```{ojs}
+//| echo: false
+viewof targetLat = Inputs.range([0, 73], {
+  value: 73, step: 1, label: "Greenland's center latitude (° N)"
+})
+```
+
+```{ojs}
+//| echo: false
+// Move a country along its own meridian to a new center latitude by rotating
+// it on the globe. Rotation keeps its true size and shape.
+function moveTo(feature, newLat) {
+  const [lon0, lat0] = d3.geoCentroid(feature);
+  const toOrigin = d3.geoRotation([-lon0, -lat0]);   // centroid -> (0, 0)
+  const toTarget = d3.geoRotation([-lon0, -newLat]); // (lon0, newLat) -> (0, 0)
+  const move = pt => toTarget.invert(toOrigin(pt));
+  const walk = c => typeof c[0] === "number" ? move(c) : c.map(walk);
+  return {type: "Feature", geometry: {
+    type: feature.geometry.type, coordinates: walk(feature.geometry.coordinates)
+  }};
+}
+
+greenland = countries.find(d => d.properties.name === "Greenland")
+drc = countries.find(d => d.properties.name === "Dem. Rep. Congo")
+movedGreenland = moveTo(greenland, targetLat)
+
+{
+  const wide = width > 700;
+  const w = Math.min(wide ? Math.floor((width - 40) / 2) : width, 440);   // slides: cap size
+  const h = Math.round(w * 0.75);
+
+  // Draw one panel and report Greenland's apparent size relative to the DRC
+  function panel(title, makeProjection, view) {
+    const projection = makeProjection().fitExtent([[6, 6], [w - 6, h - 6]], fitTarget(view));
+    const path = d3.geoPath(projection);
+    const svg = d3.create("svg").attr("viewBox", [0, 0, w, h]).style("width", "100%").style("max-width", w + "px");
+    svg.append("path").attr("d", path({type: "Sphere"})).attr("fill", col.ocean);
+    svg.append("path").attr("d", path(land)).attr("fill", "#dcd8cf");
+    svg.append("path").attr("d", path(greenland))
+      .attr("fill", "none").attr("stroke", col.red).attr("stroke-dasharray", "3 3");
+    svg.append("path").attr("d", path(drc)).attr("fill", col.blue);
+    svg.append("path").attr("d", path(movedGreenland)).attr("fill", col.red);
+    const looks = path.area(movedGreenland) / path.area(drc);
+    return html`<div>
+      <div style="font-weight:600">${title}</div>${svg.node()}
+      <div>Greenland looks <span class="readout">${looks.toFixed(1)}×</span> the DRC</div>
+    </div>`;
+  }
+
+  // True ratio, measured on the globe
+  const truth = d3.geoArea(greenland) / d3.geoArea(drc);
+
+  return html`<div class="widget">
+    <div style="display:${wide ? "grid" : "block"};grid-template-columns:1fr 1fr;gap:1rem">
+      ${panel("Mercator (conformal)", d3.geoMercator, "merc")}
+      ${panel("Equal Earth (equal-area)", d3.geoEqualEarth, "world")}
+    </div>
+    <p style="margin:.75rem 0 0">On the globe: Greenland = <b>${truth.toFixed(2)}×</b> the DRC, anywhere.
+      Dashed outline = Greenland's real location.</p>
+  </div>`;
+}
+```
+
+## Choose a CRS {.predict-slide}
+
+Pick an EPSG code (the reading's table) and defend it in one sentence:
+
+1. Total impervious area in each Maryland county
+2. TRI facilities within 1 km of each Baltimore tract centroid
+3. Asthma prevalence across the 48 contiguous states
+4. An interactive web map for a community group
+
+## Fix it, then check it
+
+```{r}
+#| label: fix
+#| fig-width: 6
+#| fig-height: 4.6
+#| output-location: column-fragment
+# Convert the vector to the raster's CRS
+cantons_lux <- st_transform(cantons, crs(elev_lux))
+
+# Check: do the CRSs match? Does it look right?
+st_crs(cantons_lux) == st_crs(elev_lux)
+plot(elev_lux)
+plot(st_geometry(cantons_lux), add = TRUE, border = "red")
+```
+
+## Check yourself {.predict-slide}
+
+`extract(r, polygons, fun = mean)` returns `NaN` for every polygon. What's the
+likely cause, and how would you check?
+
+::: {.fragment}
+- **CRS mismatch**: the polygons and the raster are in different CRSs, so
+  their coordinates don't overlap and no cells fall inside any polygon
+- Check: `st_crs(polygons) == st_crs(r)`, compare `st_bbox()` with `ext()`,
+  and plot the raster with the polygons on top
+- Fix: `st_transform()` the polygons to the raster's CRS
+:::
+
+## In your code
+
+- **Check the CRS before** combining two layers; **check the result after**
+- Most CRS mistakes don't produce errors. They produce **wrong answers**
+
+::: {.reading-note}
+Full lecture (the reading):
+<https://malonzo47.github.io/gda-2027s/lectures/04_crs/>
+:::
+
+```{=html}
+<script type="module">
+// ---- Datum figure, driven by reveal.js fragments ----
+import {datumFigure} from "../shared/datum_figure.js";
+
+const fig = datumFigure();
+document.getElementById("datum-fig").appendChild(fig.node);
+function sync() {
+  const slide = document.getElementById("datum-fig").closest("section");
+  fig.setStep(1 + slide.querySelectorAll(".fragment.step.visible").length);
+}
+
+// Predict choices: clicking one highlights it (commitment, not grading)
+document.querySelectorAll(".choice").forEach(c => c.addEventListener("click", () => {
+  c.closest(".choices").querySelectorAll(".choice").forEach(o => o.classList.remove("picked"));
+  c.classList.add("picked");
+}));
+
+const wire = () => {
+  ["fragmentshown", "fragmenthidden", "slidechanged"].forEach(ev => Reveal.on(ev, sync));
+  sync();
+};
+Reveal.isReady() ? wire() : Reveal.on("ready", wire);
+</script>
+```

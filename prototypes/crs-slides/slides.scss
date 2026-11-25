@@ -46,3 +46,13 @@ $code-block-font-size: 0.78em;   // readable from the back of the room
 
 // Callouts on slides
 .reveal .callout { font-size: .8em; }
+
+// Projection explorer on a slide: map on the left, info card in a fixed
+// column on the right. Without this the card wraps under taller maps (the
+// globe), pushing it off the bottom of the slide.
+.reveal .widget:has(> .proj-card) {
+  display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 0 1.2rem; align-items: center;
+}
+.reveal .widget:has(> .proj-card) > svg,
+.reveal .widget:has(> .proj-card) > div { grid-column: 1; }
+.reveal .widget > .proj-card { grid-column: 2; grid-row: 1 / span 2; grid-template-columns: 1fr; margin: 0; }
