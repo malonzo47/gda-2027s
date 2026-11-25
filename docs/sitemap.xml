@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
+    <loc>https://malonzo47.github.io/gda-2027s/prototypes/crs-slides/index.html</loc>
+    <lastmod>2026-11-25T16:45:42.071Z</lastmod>
+  </url>
+  <url>
     <loc>https://malonzo47.github.io/gda-2027s/lectures.html</loc>
     <lastmod>2026-10-27T16:17:04.747Z</lastmod>
   </url>
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/lectures/05_attributes/index.html</loc>
-    <lastmod>2026-11-03T13:29:28.708Z</lastmod>
+    <lastmod>2026-11-25T17:56:49.400Z</lastmod>
   </url>
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/index.html</loc>
@@ -14,15 +18,11 @@
   </url>
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/lectures/04_crs/index.html</loc>
-    <lastmod>2026-10-27T19:12:07.225Z</lastmod>
+    <lastmod>2026-11-25T17:56:49.372Z</lastmod>
   </url>
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/lectures/autocorrelation/index.html</loc>
-    <lastmod>2026-11-20T15:49:43.501Z</lastmod>
-  </url>
-  <url>
-    <loc>https://malonzo47.github.io/gda-2027s/prototypes/crs-slides/index.html</loc>
-    <lastmod>2026-11-25T16:45:42.071Z</lastmod>
+    <lastmod>2026-11-25T17:56:49.426Z</lastmod>
   </url>
   <url>
     <loc>https://malonzo47.github.io/gda-2027s/prototypes/crs-scrolly/index.html</loc>

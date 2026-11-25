@@ -435,7 +435,8 @@ sReps = {
 // ---- Spatial figure: the surface, the sensors, and this sample's CI ----
 {
   const wide = width > 640;
-  const mapW = wide ? 360 : Math.min(width - 10, 360);
+  // On phones, leave room for the .widget box's padding and border (~40 px)
+  const mapW = wide ? 360 : Math.min(width - 40, 360);
   const {cx, cy, pts, values, truth, ci} = sExample;
   const color = d3.scaleSequential(d3.interpolateRdYlBu).domain([S.mu + 3.5, S.mu - 3.5]);
 
@@ -502,7 +503,7 @@ sReps = {
       <div>${strip.node()}</div>
     </div>
     <div class="ac-note">Colors: the true temperature surface (unknown to you in real life). White dots:
-      your 30 sensors. <b>Click the map to move the cluster.</b> Right: what <code>lm(temp ~ 1)</code>
+      your 30 sensors. <b>Click the map to move the cluster.</b> The strip beside it (below it on a phone): what <code>lm(temp ~ 1)</code>
       would report, against the true region-wide mean (dashed).
       <b>${hit ? "This CI caught the truth." : "This CI missed the truth."}</b></div>
     <h4 class="ac-h">Repeat for 200 regions (cluster dropped at a random spot each time)</h4>

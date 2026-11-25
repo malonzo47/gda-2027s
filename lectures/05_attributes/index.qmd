@@ -559,7 +559,8 @@ joinGeom = {
 joinSvg = {
   const {leftNames, rightNames, resultRows} = joinGeom;
   const W = 600, H = 410, rowH = 26;
-  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "700px");
+  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "700px")
+    .style("min-width", Math.round(W * 0.8) + "px");   // keep table text legible on phones
   const L = {x: 10, y: 34}, R = {x: 440, y: 34};
   const left = drawTable(svg, {x: L.x, y: L.y, keyCol: "FIPS", title: "counties (sf)",
     cols: [{key: "NAME", w: 100}, {key: "FIPS", w: 66}, {key: "geometry", w: 70}],
@@ -591,7 +592,7 @@ joinSvg = {
     rows: resultRows});
   res.g.attr("class", "result").style("opacity", 0).style("transition", fade);
   res.rowGs.forEach(g => g.attr("class", "row resrow"));
-  return html`<div class="widget">${svg.node()}
+  return html`<div class="widget"><div class="swipe-hint">Swipe the figure sideways to see all the tables →</div>${svg.node()}
     <div class="op-box"><code class="join-code"></code><div class="op-out join-out"></div></div></div>`;
 }
 ```
@@ -725,7 +726,8 @@ cardSvg = {
   // and the result under counties, level with sids_long. The right tables
   // sit far enough right that the tentacles curve down past the result.
   const W = 720, H = 390, rowH = 26;
-  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "780px");
+  const svg = d3.create("svg").attr("viewBox", [0, 0, W, H]).style("width", "100%").style("max-width", "780px")
+    .style("min-width", Math.round(W * 0.8) + "px");   // keep table text legible on phones
   const L = {x: 10, y: 34}, B = {x: 540, y: 34}, S = {x: 540, y: 190}, Ry = 190;
   const left = drawTable(svg, {x: L.x, y: L.y, keyCol: "FIPS", title: "counties (sf)",
     cols: [{key: "NAME", w: 100}, {key: "FIPS", w: 66}, {key: "geometry", w: 70}],
@@ -766,7 +768,7 @@ cardSvg = {
     rows: longRows});
   resMany.g.attr("class", "res-many").style("opacity", 0).style("transition", fade);
   resMany.rowGs.forEach(g => g.attr("class", "row manyrow"));
-  return html`<div class="widget">${svg.node()}<div class="op-box"><div class="op-out card-out"></div></div></div>`;
+  return html`<div class="widget"><div class="swipe-hint">Swipe the figure sideways to see all the tables →</div>${svg.node()}<div class="op-box"><div class="op-out card-out"></div></div></div>`;
 }
 ```
 

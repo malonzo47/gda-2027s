@@ -304,7 +304,8 @@ places = [
 
 {
   const wide = width > 720;
-  const g = wide ? 300 : Math.min(width, 340);
+  // On phones, leave room for the .widget box's padding and border (~40 px)
+  const g = wide ? 300 : Math.min(width - 40, 340);
 
   // ---- Wireframe globe: graticule, the chosen parallel, and the places ----
   const projection = d3.geoOrthographic().rotate([-15, -35]).fitExtent([[6, 6], [g - 6, g - 6]], {type: "Sphere"});
@@ -329,7 +330,7 @@ places = [
   }
 
   // ---- Bars: 1 degree of latitude vs. 1 degree of longitude ----
-  const bw = wide ? Math.max(200, width - g - 60) : width - 20;
+  const bw = wide ? Math.max(200, width - g - 60) : width - 40;
   const bar = (label, km, color) => html`
     <div style="margin:.35rem 0">
       <div style="font-size:.95rem">${label}: <b>${km.toFixed(1)} km</b></div>

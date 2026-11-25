@@ -17,6 +17,24 @@ div.cell-output pre {
   display: none;
 }
 
+/* "Swipe sideways" note for the wide Session 5 join diagrams. Hidden on
+   desktop, where the whole figure fits; shown in the phone block below. */
+.swipe-hint {
+  display: none;
+  font-size: 0.85rem;
+  color: #6c7a86;
+  margin-bottom: 0.3rem;
+}
+
+/* Safety net: an SVG drawn wider than its widget shrinks to fit (keeping
+   its proportions) instead of being cut off. d3.pointer() accounts for the
+   scaling, so click positions stay correct. Inline min-width (Session 5
+   join diagrams) still wins over this. */
+.widget svg {
+  max-width: 100%;
+  height: auto;
+}
+
 /* Containers for the interactive (OJS) figures. */
 .widget {
   border: 1px solid #dee2e6;
@@ -97,4 +115,57 @@ div.cell-output pre {
   font-size: 0.8rem;
   color: #6c7a86;
   line-height: 1.3;
+}
+
+/* ---- Phone layout (added 2026-11-24) -------------------------------------
+   Measured at 360 and 390 px wide: the OJS widgets already fit, but long
+   inline code (EPSG strings, bounding boxes, dplyr calls) can't wrap, which
+   pushed tables, one paragraph and a "Check yourself" title past the screen
+   edge and made the whole page scroll sideways. */
+
+/* Let inline code break when it has to. Code blocks (pre) are untouched:
+   they keep their line breaks and scroll inside their own box. */
+:not(pre) > code {
+  white-space: pre-wrap;   /* Quarto sets inline code to "pre", which never wraps */
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767.98px) {
+  /* Tables that are still too wide after wrapping scroll inside their own
+     box instead of dragging the page sideways. */
+  main table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  /* Widgets: a little less padding to give figures more room, and if a
+     drawing is deliberately wider than the screen (the Session 5 join
+     diagrams), scroll it inside its box rather than shrinking its text. */
+  .widget {
+    padding: 0.6rem 0.7rem;
+    overflow-x: auto;
+  }
+
+  .swipe-hint {
+    display: block;
+    position: sticky;   /* stays in view while the figure scrolls under it */
+    left: 0;
+  }
+
+  /* Readout tiles: two per row instead of one long column. */
+  .ac-readouts {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+
+  /* Bigger tap targets for the widget radio buttons and checkboxes
+     (13 px by default). Observable Inputs wrap each choice in a label. */
+  form[class^="oi-"] input[type="radio"],
+  form[class^="oi-"] input[type="checkbox"] {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+  form[class^="oi-"] label {
+    padding: 0.25rem 0.5rem 0.25rem 0;
+  }
 }
