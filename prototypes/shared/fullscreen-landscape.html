@@ -1,0 +1,78 @@
+<!-- Landscape = full screen (phones).
+     Included at the end of each page (include-after-body). When a phone turns
+     to landscape, the next tap anywhere puts the page into full screen, hiding
+     the browser's URL bar and toolbars. Turning back to portrait leaves full
+     screen.
+
+     Why "next tap" and not automatic: browsers only allow full screen as the
+     direct result of a user action (a tap or click). Rotating the phone isn't
+     one, so a request made on rotation is refused. Leaving full screen needs
+     no tap, so that part is automatic.
+
+     Scope: touch devices whose browser supports the Fullscreen API (Chrome and
+     others on Android). iPhone Safari doesn't allow full screen for pages, so
+     there the script does nothing. Desktops are skipped (no coarse pointer). -->
+<style>
+  /* Small "Tap for full screen" note, bottom center, shown for a few seconds
+     after the phone turns sideways */
+  #fs-hint {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    z-index: 2000; pointer-events: none;
+    background: rgba(29, 39, 51, 0.88); color: #fff;
+    font: 600 14px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 8px 14px; border-radius: 999px;
+    opacity: 0; transition: opacity .3s ease;
+  }
+  #fs-hint.show { opacity: 1; }
+</style>
+<script>
+(() => {
+  const root = document.documentElement;
+  const coarse = matchMedia("(pointer: coarse)");        // touch screen
+  const landscape = matchMedia("(orientation: landscape)");
+  // Only phones/tablets whose browser can do full screen
+  if (!coarse.matches || !root.requestFullscreen) return;
+
+  // The hint element
+  const hint = document.createElement("div");
+  hint.id = "fs-hint";
+  hint.textContent = "Tap for full screen";
+  document.body.appendChild(hint);
+  let hintTimer = null;
+  const showHint = () => {
+    hint.classList.add("show");
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => hint.classList.remove("show"), 3000);
+  };
+  const hideHint = () => { clearTimeout(hintTimer); hint.classList.remove("show"); };
+
+  // "Armed" = the next tap should enter full screen. Armed only by turning to
+  // landscape (or loading in landscape), so if the reader leaves full screen
+  // by hand (back gesture), we don't grab their next tap again.
+  let armed = false;
+
+  function onOrientation() {
+    if (landscape.matches) {
+      if (!document.fullscreenElement) { armed = true; showHint(); }
+    } else {
+      armed = false;
+      hideHint();
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    }
+  }
+
+  // The tap. "click" fires for taps but not for scrolling, so swiping through
+  // the page never triggers it. The tap still does whatever it normally does
+  // (follows a link, moves a slider): we don't block it.
+  document.addEventListener("click", () => {
+    if (!armed || !landscape.matches || document.fullscreenElement) return;
+    armed = false;
+    hideHint();
+    // navigationUI: "hide" asks the browser to hide its own bars too
+    root.requestFullscreen({navigationUI: "hide"}).catch(() => {});
+  }, true);   // capture phase: runs even if a widget stops the click
+
+  landscape.addEventListener("change", onOrientation);
+  onOrientation();   // page opened while already sideways
+})();
+</script>

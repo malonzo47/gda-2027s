@@ -6,6 +6,7 @@ list, and they're excluded from site search (`search: false`).
 
 | Folder | Format | For |
 |---|---|---|
+| `crs-reading/` | the regular CRS page + landscape full-screen script (`shared/fullscreen-landscape.html`) | testing full screen on Android |
 | `crs-deck/` | short reveal.js deck (~14 slides): core concepts and Predict moments only | presenting in class (the lecture page is the reading) |
 | `crs-slides/` | the whole lecture as reveal.js slides (58) | superseded by `crs-deck/` |
 | `crs-scrolly/` | scrollytelling page (closeread extension, in `../_extensions/`) | reading at home / on phones |
