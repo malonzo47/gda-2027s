@@ -1,0 +1,51 @@
+/* Reading (scrollytelling) version of the CRS lecture. The lecture's own
+   styles come from ../shared/lecture.css; this file only covers closeread. */
+
+/* closeread settings (its CSS variables). Defaults are a light-gray section
+   and translucent slate cards on phones; use white, and white cards with dark
+   text on phones, which read better over light figures and R plots. */
+:root {
+  --cr-section-background-color: #ffffff;
+  --cr-narrative-background-color-overlay: rgba(255, 255, 255, 0.96);
+  --cr-narrative-text-color-overlay: #1d2733;
+  --cr-narrative-font-size: 1.1rem;
+}
+
+/* Scroll sections: a thin rule above and below so they read as a distinct
+   "watch this" block within the page */
+.cr-section {
+  border-top: 1px solid #e3e8ec;
+  border-bottom: 1px solid #e3e8ec;
+  margin: 1.5rem 0;
+}
+
+/* Pinned items (figure, R code + output). closeread centers each one with
+   margin:auto, which shrinks it to its content's width; a width-100% SVG
+   then collapses. Give them an explicit width. */
+.cr-section .sticky { width: min(760px, 94%); }
+.datum-figure { width: 100%; }
+/* closeread's text and pinned-item columns are grid items, which by default
+   won't shrink below their widest content (a long R output line, the
+   figure's natural width). On a phone that made the page 816 px wide and
+   scroll sideways. Let them shrink; long code lines scroll in their own box. */
+.cr-section .narrative-col,
+.cr-section .sticky-col { min-width: 0; max-width: 100%; }
+.cr-section .sticky { max-width: 100%; min-width: 0; }
+
+/* Code and output inside a pinned item: slightly smaller, scroll if wide */
+.cr-section .sticky pre { font-size: .8rem; max-width: 100%; overflow-x: auto; }
+.cr-section .sticky img { max-width: 100%; height: auto; }
+
+/* Desktop sidebar text: no card look */
+@media (min-width: 576px) {
+  .cr-section .narrative-col .narrative { box-shadow: none; }
+}
+
+/* Phones: closeread floats the text cards over the pinned item, and a step
+   changes when its card reaches mid-screen. Pin items in the top part of the
+   screen so the card being read never covers them. */
+@media (max-width: 575.98px) {
+  /* (Selector matches closeread's own margin:auto rule, so it wins.) */
+  .cr-section .sticky-col .sticky-col-stack .sticky { width: 100%; margin: 5vh auto auto; }
+  .cr-section.overlay-center .narrative { box-shadow: 0 2px 14px rgba(20, 30, 40, 0.14); }
+}

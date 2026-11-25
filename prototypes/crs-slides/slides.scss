@@ -1,0 +1,48 @@
+/*-- scss:defaults --*/
+// In-class slides: plain, high-contrast, one blue accent. Base size is a
+// little smaller than reveal.js's default because these slides carry live
+// widgets and R output.
+$body-bg: #ffffff;
+$body-color: #1d2733;
+$link-color: #1f5f8b;
+$presentation-heading-color: #12202e;
+$presentation-font-size-root: 30px;
+$presentation-heading-font-weight: 700;
+$presentation-h2-font-size: 1.45em;
+$presentation-h1-font-size: 2.1em;
+$code-block-font-size: 0.78em;   // readable from the back of the room
+
+/*-- scss:rules --*/
+.reveal h2 { letter-spacing: -0.01em; margin-bottom: .5rem; }
+
+// Section divider slides (# headings): big number + title, left-aligned
+.reveal .slides section.title-slide h1,
+.reveal section > h1 { text-align: left; }
+
+// Predict / Discuss / Choose slides: green edge like the lecture's callouts
+.predict-slide h2 { color: #3d6b3c; border-left: 10px solid #5b8c5a; padding-left: .8rem; }
+.predict-box { border-left: 8px solid #5b8c5a; background: #f1f7f1; padding: .5rem .9rem; margin-top: 1rem; }
+
+// Datum figure slide: drawing fills the slide, caption beneath
+#datum-fig { max-width: 980px; margin: 0 auto; }
+#datum-fig .datum-caption { font-size: .8em; font-weight: 600; text-align: center; margin-top: .4rem; min-height: 2.4em; }
+.fragment.step { display: none; }
+
+// Widgets: the lecture's .widget box, a bit tighter on a slide
+.reveal .widget { margin: .4rem 0 0; padding: .5rem .8rem; font-size: .7em; }
+.reveal .widget .readout { font-size: 1.5em; }
+.reveal .proj-card { font-size: .95em; }
+// Observable inputs (sliders, selects, checkboxes) at a readable size
+.reveal form[class^="oi-"] { font-size: .62em; }
+
+// R output smaller than prose; tables compact
+// The lecture stylesheet (lecture.css) sets code blocks to 0.9rem, which on
+// a slide is tiny; size them relative to the slide text instead.
+.reveal pre.sourceCode,
+.reveal div.cell-output pre { font-size: .62em; line-height: 1.4; }
+.reveal pre code { font-size: 1em; max-height: none; }
+.reveal table { font-size: .6em; }
+.reveal .smaller table { font-size: .9em; }
+
+// Callouts on slides
+.reveal .callout { font-size: .8em; }
